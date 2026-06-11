@@ -1,114 +1,77 @@
 <script lang="ts">
-	import { Surface, Button, Text, Stack, Field, Badge, ThemePicker } from '$lib/components';
-	import { theme } from '$lib/themes/store.svelte';
+	// Dashboard: connection overview + cards linking to each backend app.
+	import { goto } from '$app/navigation';
+	import { Surface, Stack, Text, Badge, Icon } from '$lib/components';
+	import { manifest } from '$lib/manifest/store.svelte';
+	import { connection, type LinkState } from '$lib/connection.svelte';
 
-	let todo = $state('');
-	let agree = $state(false);
-	let items = $state(['Wire up the spine', 'Add the todo attachment', 'Ship the APK']);
-
-	function add() {
-		const t = todo.trim();
-		if (t) {
-			items = [...items, t];
-			todo = '';
-		}
-	}
+	const stateVariant: Record<LinkState, 'success' | 'warn' | 'danger'> = {
+		online: 'success',
+		connecting: 'warn',
+		offline: 'danger'
+	};
+	const stateLabel: Record<LinkState, string> = {
+		online: 'Connected',
+		connecting: 'Connecting…',
+		offline: 'Offline'
+	};
 </script>
 
-<div class="page">
-	<Stack gap={5}>
-		<Stack gap={2}>
-			<Text role="title">Raspy — Theme Lab</Text>
-			<Text role="muted">
-				Every component reads only design tokens. Pick any color × any concept — the whole UI
-				re-skins live. Currently:
-				<Badge variant="accent">{theme.color.name}</Badge>
-				×
-				<Badge variant="info">{theme.concept.name}</Badge>
-			</Text>
-		</Stack>
-
-		<Surface level={2}>
-			<Stack gap={3}>
-				<Text role="label">Theme</Text>
-				<ThemePicker />
-			</Stack>
-		</Surface>
-
-		<Stack direction="row" gap={4} wrap>
-			<Surface>
-				<Stack gap={3}>
-					<Text role="heading">Buttons</Text>
-					<Stack direction="row" gap={2} wrap>
-						<Button variant="accent">Accent</Button>
-						<Button variant="neutral">Neutral</Button>
-						<Button variant="ghost">Ghost</Button>
-					</Stack>
-					<Stack direction="row" gap={2} wrap>
-						<Button variant="success">Success</Button>
-						<Button variant="warn">Warn</Button>
-						<Button variant="danger">Danger</Button>
-					</Stack>
-				</Stack>
-			</Surface>
-
-			<Surface>
-				<Stack gap={3}>
-					<Text role="heading">Status</Text>
-					<Stack direction="row" gap={2} wrap>
-						<Badge>Neutral</Badge>
-						<Badge variant="success">Online</Badge>
-						<Badge variant="warn">Pending</Badge>
-						<Badge variant="danger">Error</Badge>
-						<Badge variant="info">Info</Badge>
-					</Stack>
-				</Stack>
-			</Surface>
-		</Stack>
-
-		<Surface>
-			<Stack gap={3}>
-				<Text role="heading">Todo (component demo)</Text>
-				<Stack direction="row" gap={2} align="end">
-					<div style="flex:1">
-						<Field label="New item" placeholder="What needs doing?" bind:value={todo} />
-					</div>
-					<Button onclick={add}>Add</Button>
-				</Stack>
-				<Stack gap={2}>
-					{#each items as item (item)}
-						<Surface interactive>
-							<Text role="body">{item}</Text>
-						</Surface>
-					{/each}
-				</Stack>
-				<Field type="checkbox" label="I read plan/45-theming.md" bind:value={agree} />
-			</Stack>
-		</Surface>
-
-		<Surface>
-			<Stack gap={3}>
-				<Text role="heading">Form controls</Text>
-				<Field label="Server address" placeholder="https://pi.example.com" />
-				<Field
-					type="select"
-					label="Transport"
-					options={[
-						{ value: 'lan', label: 'LAN' },
-						{ value: 'cf', label: 'Cloudflare Tunnel' },
-						{ value: 'ts', label: 'Tailscale' }
-					]}
-				/>
-				<Field type="textarea" label="Notes" placeholder="Anything…" />
-			</Stack>
-		</Surface>
+<Stack gap={5}>
+	<Stack gap={1}>
+		<Text role="title">Dashboard</Text>
+		<Text role="muted">Apps and status are served live from the backend.</Text>
 	</Stack>
-</div>
+
+	<Surface level={2}>
+		<Stack gap={3}>
+			<Text role="heading">Connection</Text>
+			<Stack direction="row" gap={2} wrap>
+				<Badge variant={stateVariant[connection.http]}>API · {stateLabel[connection.http]}</Badge>
+				<Badge variant={stateVariant[connection.ws]}>Live events · {stateLabel[connection.ws]}</Badge>
+				{#if connection.version}
+					<Badge variant="info">v{connection.version}</Badge>
+				{/if}
+				<Badge>{connection.attachmentCount} apps</Badge>
+				{#if connection.erroredCount}
+					<Badge variant="danger">{connection.erroredCount} failed</Badge>
+				{/if}
+			</Stack>
+		</Stack>
+	</Surface>
+
+	<Stack gap={3}>
+		<Text role="heading">Apps</Text>
+		{#if manifest.attachments.length === 0}
+			<Text role="muted">
+				{manifest.loading ? 'Loading apps…' : 'No apps available from the backend.'}
+			</Text>
+		{:else}
+			<div class="grid">
+				{#each manifest.attachments as app (app.id)}
+					<Surface interactive onclick={() => goto(`/a/${app.id}`)}>
+						<Stack direction="row" gap={3} align="center">
+							<span class="ico"><Icon name={app.icon} size={22} /></span>
+							<Stack gap={1}>
+								<Text role="label">{app.title}</Text>
+								<Text role="muted">v{app.version}</Text>
+							</Stack>
+						</Stack>
+					</Surface>
+				{/each}
+			</div>
+		{/if}
+	</Stack>
+</Stack>
 
 <style>
-	.page {
-		max-width: 880px;
-		margin: 0 auto;
-		padding: var(--space-6) var(--space-4);
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: var(--space-3);
+	}
+	.ico {
+		display: inline-flex;
+		color: var(--accent);
 	}
 </style>
