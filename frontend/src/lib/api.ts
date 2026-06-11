@@ -67,3 +67,77 @@ export function attAction<T = unknown>(
 	}
 	return request<T>(attUrl(attachmentId, path), init);
 }
+
+// --- query-string + binary helpers (used by the file manager) ---------------
+
+function withQuery(url: string, params: Record<string, string>): string {
+	const qs = new URLSearchParams(params).toString();
+	return qs ? `${url}?${qs}` : url;
+}
+
+/** GET JSON from an attachment endpoint with query params. */
+export function attGetQuery<T = unknown>(
+	attachmentId: string,
+	path: string,
+	params: Record<string, string>
+): Promise<T> {
+	return request<T>(withQuery(attUrl(attachmentId, path), params));
+}
+
+/** POST JSON to an attachment endpoint with query params (returns JSON). */
+export function attPostQuery<T = unknown>(
+	attachmentId: string,
+	path: string,
+	params: Record<string, string>,
+	body?: Record<string, unknown>
+): Promise<T> {
+	return request<T>(withQuery(attUrl(attachmentId, path), params), {
+		method: 'POST',
+		body: body ? JSON.stringify(body) : undefined,
+		headers: body ? { 'content-type': 'application/json' } : undefined
+	});
+}
+
+/** DELETE an attachment endpoint with query params. */
+export function attDeleteQuery(
+	attachmentId: string,
+	path: string,
+	params: Record<string, string>
+): Promise<void> {
+	return request<void>(withQuery(attUrl(attachmentId, path), params), { method: 'DELETE' });
+}
+
+/** Upload a single file via multipart/form-data to an attachment endpoint. */
+export async function attUpload(
+	attachmentId: string,
+	path: string,
+	params: Record<string, string>,
+	file: File
+): Promise<unknown> {
+	const fd = new FormData();
+	fd.append('file', file, file.name);
+	return request<unknown>(withQuery(attUrl(attachmentId, path), params), {
+		method: 'POST',
+		body: fd
+	});
+}
+
+/** Absolute URL for a GET endpoint with query params (download links, previews). */
+export function attResourceUrl(
+	attachmentId: string,
+	path: string,
+	params: Record<string, string>
+): string {
+	return withQuery(attUrl(attachmentId, path), params);
+}
+
+/** Fetch preview content; returns text and the content-type. */
+export async function attPreview(
+	attachmentId: string,
+	path: string
+): Promise<{ contentType: string; text: string; status: number }> {
+	const res = await fetch(attResourceUrl(attachmentId, 'preview', { path }));
+	const contentType = res.headers.get('content-type') ?? '';
+	const text = res.ok && contentType.startsWith('text/') ? await res.text() : '';
+	return { contentType, text, status: res.status };
+}

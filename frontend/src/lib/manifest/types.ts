@@ -39,6 +39,8 @@ export interface UINode {
 	key?: string;
 	empty?: string;
 	columns?: Array<{ key: string; label: string }>;
+	// file manager
+	list_source?: string;
 }
 
 export interface AttachmentManifest {

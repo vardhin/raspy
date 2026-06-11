@@ -130,6 +130,28 @@ def table(*, source: str, columns: list[dict[str, str]], key: str = "id") -> UIN
     return _node("table", source=source, columns=columns, key=key)
 
 
+# --- file manager -----------------------------------------------------------
+
+
+def file_manager(
+    *,
+    list_source: str = "list",
+    title: str | None = None,
+) -> UINode:
+    """A directory browser bound to an attachment's file API.
+
+    One composite Tier-1 node (vs. many narrow ones) so the shell's vocabulary
+    grows minimally. The frontend file-manager component reads a directory via
+    ``GET /api/att/<id>/<list_source>?path=<rel>`` (returning
+    ``{path, name, segments, entries:[{name,path,kind,size,modified,symlink}]}``)
+    and uses the attachment's conventional sibling endpoints relative to it:
+    ``download``, ``preview``, ``upload``, ``mkdir``, ``rename``, ``move``,
+    ``delete``. All paths are root-relative; confinement is the backend's job.
+    Flutter-portable: it's pure data + wiring, no shipped client code.
+    """
+    return _node("file_manager", title=title, list_source=list_source)
+
+
 # --- action helpers ---------------------------------------------------------
 
 

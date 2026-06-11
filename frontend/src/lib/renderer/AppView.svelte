@@ -42,9 +42,15 @@
 				{/if}
 			</Stack>
 		{/if}
-		{#each app.ui.children ?? [] as child, i (i)}
-			<Node node={child} />
-		{/each}
+		{#if app.ui.type === 'view'}
+			<!-- A view container: render its children. -->
+			{#each app.ui.children ?? [] as child, i (i)}
+				<Node node={child} />
+			{/each}
+		{:else}
+			<!-- A non-view root node (e.g. file_manager): render it directly. -->
+			<Node node={app.ui} />
+		{/if}
 	</Stack>
 {:else}
 	<Text role="muted">This app has no UI.</Text>
