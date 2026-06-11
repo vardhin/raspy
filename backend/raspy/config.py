@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     )
 
     host: str = "127.0.0.1"
-    port: int = 8787
+    port: int = 49317
 
     # Where SQLite, secrets and per-attachment data live.
     data_dir: Path = _DEFAULT_DATA_DIR
