@@ -7,6 +7,7 @@
 	import Self from './Node.svelte';
 	import { Surface, Stack, Text, Badge, Button, Field } from '$lib/components';
 	import FileManager from './FileManager.svelte';
+	import SystemStats from './SystemStats.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -140,6 +141,8 @@
 	</table>
 {:else if node.type === 'file_manager'}
 	<FileManager {node} />
+{:else if node.type === 'system_stats'}
+	<SystemStats {node} />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

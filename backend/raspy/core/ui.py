@@ -152,6 +152,18 @@ def file_manager(
     return _node("file_manager", title=title, list_source=list_source)
 
 
+def system_stats(*, source: str = "snapshot", title: str | None = None) -> UINode:
+    """A live system-health dashboard bound to an attachment's telemetry API.
+
+    The shell's component fetches an initial reading from
+    ``GET /api/att/<id>/<source>`` and then updates live from ``stats.tick``
+    WebSocket events carrying the same snapshot shape (temp, voltage, throttle,
+    cpu, memory, storage, uptime). One composite Tier-1 node, Flutter-portable —
+    pure data + wiring, no shipped client code.
+    """
+    return _node("system_stats", title=title, source=source)
+
+
 # --- action helpers ---------------------------------------------------------
 
 
