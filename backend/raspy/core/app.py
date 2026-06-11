@@ -14,9 +14,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import Settings, get_settings
-from . import manifest, system, ws
+from . import manifest, notifications, system, ws
 from .db import Database
 from .events import EventBus
+from .notifications import NotificationService
 from .registry import AttachmentRegistry
 
 log = logging.getLogger("raspy")
@@ -33,7 +34,14 @@ async def lifespan(app: FastAPI):
     events = EventBus()
     app.state.events = events
 
-    registry = AttachmentRegistry(app=app, settings=settings, db=db, events=events)
+    notifier = NotificationService(db=db, events=events, settings=settings)
+    await notifier.init()
+    notifier.start()  # background outbox drain worker
+    app.state.notifications = notifier
+
+    registry = AttachmentRegistry(
+        app=app, settings=settings, db=db, events=events, notifications=notifier
+    )
     await registry.load_all()
     app.state.registry = registry
 
@@ -46,6 +54,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await registry.shutdown_all()
+        await notifier.stop()
         db.close()
 
 
@@ -69,5 +78,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router, prefix="/api")
     app.include_router(manifest.router, prefix="/api")
     app.include_router(ws.router, prefix="/api")
+    app.include_router(notifications.router, prefix="/api")
 
     return app

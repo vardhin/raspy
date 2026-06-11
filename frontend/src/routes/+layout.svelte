@@ -5,6 +5,7 @@
 	import { theme } from '$lib/themes/store.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
+	import { notifications } from '$lib/notifications/store.svelte';
 	import { Sidebar } from '$lib/components';
 
 	let { children } = $props();
@@ -18,13 +19,20 @@
 		theme.init();
 		manifest.load();
 		connection.start();
+		// Start after connection: the store subscribes to WS notification events.
+		notifications.start();
 	});
 
-	// Revalidate the manifest whenever the WS reconnects after a drop.
-	const offReconnect = connection.onReconnect(() => manifest.revalidate());
+	// Revalidate the manifest whenever the WS reconnects after a drop, and refetch
+	// any notifications we missed while offline.
+	const offReconnect = connection.onReconnect(() => {
+		manifest.revalidate();
+		notifications.refresh();
+	});
 
 	onDestroy(() => {
 		offReconnect();
+		notifications.stop();
 		connection.stop();
 	});
 </script>

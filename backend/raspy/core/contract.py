@@ -18,9 +18,14 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from typing import TYPE_CHECKING
+
 from .db import ScopedDB
 from .events import EventBus
 from .ui import UINode
+
+if TYPE_CHECKING:
+    from .notifications import NotificationService
 
 
 @dataclass
@@ -31,9 +36,32 @@ class AttachmentContext:
     data_dir: Path
     events: EventBus
     config: dict[str, Any]
+    notifications: "NotificationService | None" = None
+    attachment_id: str = "core"
 
     def publish(self, topic: str, payload: Any = None) -> None:
         self.events.publish(topic, payload)
+
+    async def notify(
+        self,
+        title: str,
+        body: str = "",
+        *,
+        icon: str | None = None,
+        url: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Send a notification (history + live WS + background push).
+
+        Tagged with this attachment's id as the source. No-op (returns None) if
+        the core notification service is unavailable, so attachments stay
+        decoupled from whether notifications are configured.
+        """
+        if self.notifications is None:
+            return None
+        return await self.notifications.notify(
+            title, body, source=self.attachment_id, icon=icon, url=url, data=data
+        )
 
 
 class BaseAttachment:
@@ -79,6 +107,11 @@ class BaseAttachment:
     @property
     def events(self) -> EventBus:
         return self.ctx.events
+
+    async def notify(self, title: str, body: str = "", **kwargs: Any) -> Any:
+        """Convenience: send a notification tagged with this attachment.
+        See :meth:`AttachmentContext.notify`."""
+        return await self.ctx.notify(title, body, **kwargs)
 
     def ui_version(self) -> str:
         """Hash of the UI descriptor, for client-side caching."""

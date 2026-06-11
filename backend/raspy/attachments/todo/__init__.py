@@ -82,6 +82,10 @@ class Todo(BaseAttachment):
             )
             item = await _row(new_id)
             self.events.publish("todo.created", item)
+            # Demo of the core notification service: any attachment can do this.
+            await self.notify(
+                "New todo added", item["title"], icon="check-square", url="/a/todo"
+            )
             return item
 
         @r.patch("/items/{item_id}")

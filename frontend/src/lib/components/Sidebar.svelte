@@ -6,6 +6,7 @@
 	import Icon from './Icon.svelte';
 	import Badge from './Badge.svelte';
 	import ThemePicker from './ThemePicker.svelte';
+	import NotificationBell from './NotificationBell.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { connection, type LinkState } from '$lib/connection.svelte';
 
@@ -38,6 +39,7 @@
 	<div class="brand">
 		<span class="dot {overall}" title={stateLabel[overall]}></span>
 		<span class="brand-name">Raspy</span>
+		<NotificationBell />
 	</div>
 
 	<nav class="nav">
@@ -109,6 +111,9 @@
 	.brand-name {
 		font-weight: var(--font-weight-bold);
 		font-size: 1.05rem;
+	}
+	.brand :global(.bell-wrap) {
+		margin-left: auto;
 	}
 	.dot {
 		width: 0.6rem;

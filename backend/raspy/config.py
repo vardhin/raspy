@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # (Built-in attachments under raspy/attachments/ are always discovered.)
     attachments_dir: Path | None = None
 
+    # Web Push (VAPID) keys for background notifications. Generate a pair with
+    # `raspy-vapid` (see scripts) and set these via config.toml or env
+    # (RASPY_VAPID_PUBLIC_KEY / RASPY_VAPID_PRIVATE_KEY). Without them the
+    # foreground (WebSocket) notification path still works; only background push
+    # to closed tabs is skipped. `vapid_subject` is the contact mailto/URL the
+    # push service sees.
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    vapid_subject: str = "mailto:admin@localhost"
+
     # Per-attachment config blob loaded from config.toml's [attachments.<id>].
     _attachment_config: dict[str, dict[str, Any]] = {}
 

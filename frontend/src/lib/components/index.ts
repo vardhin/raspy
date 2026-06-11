@@ -9,3 +9,4 @@ export { default as Icon } from './Icon.svelte';
 export { default as ThemePicker } from './ThemePicker.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
 export { default as Modal } from './Modal.svelte';
+export { default as NotificationBell } from './NotificationBell.svelte';

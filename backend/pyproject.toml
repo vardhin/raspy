@@ -10,10 +10,12 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-multipart>=0.0.32",
+    "pywebpush>=2.0",
 ]
 
 [project.scripts]
 raspy = "raspy.__main__:main"
+raspy-vapid = "raspy.vapid:main"
 
 [dependency-groups]
 dev = [

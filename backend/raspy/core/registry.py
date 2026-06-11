@@ -26,6 +26,7 @@ from ..config import Settings
 from .contract import AttachmentContext, BaseAttachment
 from .db import Database, ScopedDB
 from .events import EventBus
+from .notifications import NotificationService
 
 log = logging.getLogger("raspy.registry")
 
@@ -52,6 +53,7 @@ class AttachmentRegistry:
     settings: Settings
     db: Database
     events: EventBus
+    notifications: NotificationService | None = None
 
     loaded: dict[str, LoadedAttachment] = field(default_factory=dict)
     errors: list[AttachmentError] = field(default_factory=list)
@@ -182,6 +184,8 @@ class AttachmentRegistry:
             data_dir=data_dir,
             events=self.events,
             config=self.settings.attachment_config(inst.id),
+            notifications=self.notifications,
+            attachment_id=inst.id,
         )
         inst.ctx = ctx
         await inst.on_load(ctx)
