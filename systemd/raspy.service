@@ -1,0 +1,43 @@
+# raspy.service — run the Raspy FastAPI spine on boot via systemd.
+#
+# WHY NO BUILD STEP: raspy is a Python/FastAPI app, so there's nothing to
+# compile. `uv run raspy` already launches uvicorn with reload=False (see
+# raspy/__main__.py), and uvicorn[standard] ships the C-accelerated uvloop +
+# httptools. Running a single worker is intentional: the app holds an
+# in-process WebSocket/event subscriber registry plus a local SQLite db, so
+# extra workers would break WS broadcasts rather than speed anything up.
+#
+# ASSUMPTIONS (adjust if a future Pi differs):
+#   - Linux user `raspberrypi` with home /home/raspberrypi
+#   - Repo cloned to ~/raspy  (backend lives at ~/raspy/backend)
+#   - uv installed at ~/.local/bin/uv
+#
+# INSTALL ON A NEW PI:
+#   sudo cp systemd/raspy.service /etc/systemd/system/raspy.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now raspy
+#
+# CHECK / LOGS:
+#   systemctl status raspy
+#   journalctl -u raspy -f
+
+[Unit]
+Description=Raspy spine — modular FastAPI control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=raspberrypi
+Group=raspberrypi
+WorkingDirectory=/home/raspberrypi/raspy/backend
+# systemd starts services with a minimal PATH; add uv's dir explicitly.
+Environment=PATH=/home/raspberrypi/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/raspberrypi/.local/bin/uv run raspy
+Restart=always
+RestartSec=3
+# First boot on a fresh Pi may need to build the venv / fetch Python; be patient.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
