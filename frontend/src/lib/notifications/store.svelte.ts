@@ -47,7 +47,6 @@ class Notifications {
 	permission = $state<PermissionState>('default');
 	/** True once a push subscription is active on this device. */
 	pushEnabled = $state(false);
-	loading = $state(false);
 
 	#offEvent: (() => void) | null = null;
 	#started = false;
@@ -73,12 +72,20 @@ class Notifications {
 				? (window.Notification.permission as PermissionState)
 				: 'unsupported';
 
-		// Foreground path: a live event for every notification the spine emits.
+		// Foreground path + badge sync.
+		//  - "notification.new": a brand-new notification — show the OS popup and
+		//    bump the count.
+		//  - "notifications.changed": any mutation (read/delete/clear), including
+		//    actions taken on the /a/notifications page in another tab — re-pull
+		//    the unread count so the sidebar badge stays correct.
 		this.#offEvent = connection.onEvent((topic, payload) => {
-			if (topic !== 'notification.new') return;
-			const note = payload as Notification;
-			this.#prepend(note);
-			this.#showForeground(note);
+			if (topic === 'notification.new') {
+				const note = payload as Notification;
+				this.#prepend(note);
+				this.#showForeground(note);
+			} else if (topic === 'notifications.changed') {
+				void this.refreshUnread();
+			}
 		});
 
 		this.#startElection();
@@ -155,10 +162,14 @@ class Notifications {
 		return min === this.#tabId;
 	}
 
-	// --- history -------------------------------------------------------------
+	// --- badge state ----------------------------------------------------------
+	// History display, mark-read, delete, clear and send-test all live on the
+	// server-driven /a/notifications page (the notifications attachment). The
+	// store only owns what the *shell chrome* needs: the unread count for the
+	// sidebar badge, and a small recent set so we don't re-popup the same id.
 
+	/** Full pull at boot / after reconnect: seeds the dedup set + unread count. */
 	async refresh(): Promise<void> {
-		this.loading = true;
 		try {
 			const res = await fetch(apiUrl('/api/notifications?limit=50'), {
 				headers: { accept: 'application/json' }
@@ -169,42 +180,25 @@ class Notifications {
 			this.unread = data.unread;
 		} catch {
 			// offline — keep whatever we have
-		} finally {
-			this.loading = false;
 		}
 	}
 
-	async markRead(id: number): Promise<void> {
-		const note = this.items.find((n) => n.id === id);
-		if (note && !note.read) {
-			note.read = true;
-			this.unread = Math.max(0, this.unread - 1);
+	/** Lightweight: re-fetch just the unread count (on any mutation event). */
+	async refreshUnread(): Promise<void> {
+		try {
+			const res = await fetch(apiUrl('/api/notifications?limit=1'), {
+				headers: { accept: 'application/json' }
+			});
+			if (!res.ok) return;
+			const data: { unread: number } = await res.json();
+			this.unread = data.unread;
+		} catch {
+			// offline — leave the badge as-is
 		}
-		await fetch(apiUrl(`/api/notifications/${id}/read`), { method: 'POST' }).catch(() => {});
-	}
-
-	async markAllRead(): Promise<void> {
-		for (const n of this.items) n.read = true;
-		this.unread = 0;
-		await fetch(apiUrl('/api/notifications/read-all'), { method: 'POST' }).catch(() => {});
-	}
-
-	async clear(): Promise<void> {
-		this.items = [];
-		this.unread = 0;
-		await fetch(apiUrl('/api/notifications'), { method: 'DELETE' }).catch(() => {});
-	}
-
-	async sendTest(): Promise<void> {
-		await fetch(apiUrl('/api/notifications/test'), {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({})
-		}).catch(() => {});
 	}
 
 	#prepend(note: Notification): void {
-		// Dedupe: the foreground event may arrive for a note we already fetched.
+		// Dedupe: the foreground event may arrive for a note we already have.
 		if (this.items.some((n) => n.id === note.id)) return;
 		this.items = [note, ...this.items].slice(0, 50);
 		if (!note.read) this.unread += 1;

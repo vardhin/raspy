@@ -6,9 +6,14 @@
 	import Icon from './Icon.svelte';
 	import Badge from './Badge.svelte';
 	import ThemePicker from './ThemePicker.svelte';
-	import NotificationBell from './NotificationBell.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { connection, type LinkState } from '$lib/connection.svelte';
+	import { notifications } from '$lib/notifications/store.svelte';
+
+	async function togglePush() {
+		if (notifications.pushEnabled) await notifications.disablePush();
+		else await notifications.enablePush();
+	}
 
 	const stateVariant: Record<LinkState, 'success' | 'warn' | 'danger'> = {
 		online: 'success',
@@ -39,7 +44,6 @@
 	<div class="brand">
 		<span class="dot {overall}" title={stateLabel[overall]}></span>
 		<span class="brand-name">Raspy</span>
-		<NotificationBell />
 	</div>
 
 	<nav class="nav">
@@ -61,6 +65,9 @@
 				<a class="item" class:active={active(`/a/${app.id}`)} href="/a/{app.id}">
 					<Icon name={app.icon} />
 					<span>{app.title}</span>
+					{#if app.id === 'notifications' && notifications.unread > 0}
+						<span class="count">{notifications.unread > 99 ? '99+' : notifications.unread}</span>
+					{/if}
 				</a>
 			{/each}
 		{/if}
@@ -74,6 +81,13 @@
 		{#if connection.version}
 			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
 		{/if}
+		{#if notifications.permission !== 'unsupported'}
+			<button class="push-toggle" onclick={togglePush}>
+				<Icon name={notifications.pushEnabled ? 'bell' : 'bell-off'} size={15} />
+				<span>{notifications.pushEnabled ? 'Push on' : 'Enable push'}</span>
+			</button>
+		{/if}
+
 		<details class="theme">
 			<summary>Theme</summary>
 			<div class="theme-body"><ThemePicker /></div>
@@ -112,8 +126,20 @@
 		font-weight: var(--font-weight-bold);
 		font-size: 1.05rem;
 	}
-	.brand :global(.bell-wrap) {
+	.count {
 		margin-left: auto;
+		min-width: 1.15rem;
+		height: 1.15rem;
+		padding: 0 5px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.66rem;
+		font-weight: var(--font-weight-bold);
+		line-height: 1;
+		color: var(--danger-fg);
+		background: var(--danger);
+		border-radius: var(--radius-full);
 	}
 	.dot {
 		width: 0.6rem;
@@ -201,6 +227,24 @@
 	.meta {
 		color: var(--muted);
 		font-size: 0.75rem;
+	}
+	.push-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-1) var(--space-2);
+		background: transparent;
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-md);
+		color: var(--muted);
+		font-size: 0.78rem;
+		font-weight: var(--font-weight-bold);
+		cursor: pointer;
+		transition: color 120ms ease, background 120ms ease;
+	}
+	.push-toggle:hover {
+		color: var(--fg);
+		background: var(--surface);
 	}
 	.theme summary {
 		cursor: pointer;

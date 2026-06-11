@@ -184,7 +184,11 @@ class NotificationService:
             "created": now,
         }
         # 1. Foreground: live to any connected client over the WS.
+        #    - "notification.new" drives the global handler (OS popup + bell).
+        #    - "notifications.changed" matches the notifications app's id prefix
+        #      so an open /a/notifications view re-pulls its history live.
         self._events.publish("notification.new", note)
+        self._events.publish("notifications.changed", {"id": note_id})
         # 2. Background: enqueue one durable outbox row per subscription. The
         #    drain worker delivers them with retries — so a notification raised
         #    while the push service (or the Pi) is momentarily down is not lost.
@@ -212,6 +216,9 @@ class NotificationService:
 
     async def mark_all_read(self) -> None:
         await self._db.execute(f"UPDATE {_T_NOTES} SET read = 1 WHERE read = 0")
+
+    async def delete(self, note_id: int) -> None:
+        await self._db.execute(f"DELETE FROM {_T_NOTES} WHERE id = ?", (note_id,))
 
     async def clear(self) -> None:
         await self._db.execute(f"DELETE FROM {_T_NOTES}")
