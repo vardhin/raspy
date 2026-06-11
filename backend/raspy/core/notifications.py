@@ -82,6 +82,8 @@ class NotificationService:
         # Set when a new outbox row is enqueued, so the drain worker wakes
         # immediately instead of waiting out its idle sleep.
         self._wake = asyncio.Event()
+        # Pending delayed notifications, so they can be cancelled on shutdown.
+        self._scheduled: set[asyncio.Task[None]] = set()
 
     @property
     def vapid_public_key(self) -> str | None:
@@ -145,6 +147,11 @@ class NotificationService:
 
     async def stop(self) -> None:
         """Stop the drain worker. In-flight sends finish; pending rows persist."""
+        for task in list(self._scheduled):
+            task.cancel()
+        if self._scheduled:
+            await asyncio.gather(*self._scheduled, return_exceptions=True)
+        self._scheduled.clear()
         if self._worker is not None:
             self._worker.cancel()
             try:
@@ -194,6 +201,22 @@ class NotificationService:
         #    while the push service (or the Pi) is momentarily down is not lost.
         await self._enqueue_push(note)
         return note
+
+    def notify_later(self, delay: float, title: str, body: str = "", **kwargs: Any) -> None:
+        """Fire a notification after ``delay`` seconds. Used by the test button so
+        you can background the app and watch the real (background) notification
+        arrive. The task is tracked and cancelled on shutdown."""
+
+        async def _run() -> None:
+            try:
+                await asyncio.sleep(delay)
+                await self.notify(title, body, **kwargs)
+            except asyncio.CancelledError:
+                pass
+
+        task = asyncio.create_task(_run())
+        self._scheduled.add(task)
+        task.add_done_callback(self._scheduled.discard)
 
     # --- history -------------------------------------------------------------
 

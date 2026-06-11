@@ -109,6 +109,18 @@ async def test_notify_enqueues_one_outbox_row_per_subscription(tmp_path, monkeyp
     assert stats.get("pending") == 1
 
 
+async def test_notify_later_records_after_delay(tmp_path) -> None:
+    svc = await _svc(tmp_path)
+
+    svc.notify_later(0.01, "later", "body", source="test")
+    assert await svc.list() == []
+
+    await asyncio.sleep(0.05)
+    notes = await svc.list()
+    assert notes[0]["title"] == "later"
+    assert notes[0]["source"] == "test"
+
+
 async def test_outbox_marks_sent_on_success(tmp_path, monkeypatch) -> None:
     svc = await _svc(tmp_path)
     await _sub(svc)

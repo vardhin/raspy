@@ -8,7 +8,7 @@
 	import ThemePicker from './ThemePicker.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { connection, type LinkState } from '$lib/connection.svelte';
-	import { notifications } from '$lib/notifications/store.svelte';
+	import { notifications, type PushStatus } from '$lib/notifications/store.svelte';
 
 	async function togglePush() {
 		if (notifications.pushEnabled) await notifications.disablePush();
@@ -24,6 +24,24 @@
 		online: 'Connected',
 		connecting: 'Connecting…',
 		offline: 'Offline'
+	};
+	const pushVariant: Record<PushStatus, 'success' | 'warn' | 'danger' | 'neutral'> = {
+		enabled: 'success',
+		off: 'warn',
+		denied: 'danger',
+		unsupported: 'neutral'
+	};
+	const pushLabel: Record<PushStatus, string> = {
+		enabled: 'Enabled',
+		off: 'Off',
+		denied: 'Blocked',
+		unsupported: 'Unsupported'
+	};
+	const pushDetail: Record<PushStatus, string> = {
+		enabled: 'Permission granted and this device is subscribed.',
+		off: 'Supported, but this device is not subscribed.',
+		denied: 'Browser permission is blocked for this site.',
+		unsupported: 'This browser or connection cannot use Web Push.'
 	};
 
 	const overall = $derived<LinkState>(
@@ -81,12 +99,34 @@
 		{#if connection.version}
 			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
 		{/if}
-		{#if notifications.permission !== 'unsupported'}
-			<button class="push-toggle" onclick={togglePush}>
-				<Icon name={notifications.pushEnabled ? 'bell' : 'bell-off'} size={15} />
-				<span>{notifications.pushEnabled ? 'Push on' : 'Enable push'}</span>
-			</button>
-		{/if}
+		<div class="push-panel {notifications.pushStatus}">
+			<div class="push-state">
+				<span class="push-dot" aria-hidden="true"></span>
+				<div class="push-copy">
+					<div class="push-title">
+						Push <Badge variant={pushVariant[notifications.pushStatus]}>
+							{pushLabel[notifications.pushStatus]}
+						</Badge>
+					</div>
+					<div class="push-detail">{pushDetail[notifications.pushStatus]}</div>
+				</div>
+			</div>
+			{#if notifications.pushError}
+				<div class="push-error">{notifications.pushError}</div>
+			{/if}
+			{#if notifications.pushStatus === 'enabled' || notifications.pushStatus === 'off'}
+				<button class="push-toggle" disabled={notifications.pushBusy} onclick={togglePush}>
+					<Icon name={notifications.pushStatus === 'enabled' ? 'bell-off' : 'bell'} size={15} />
+					<span>
+						{notifications.pushBusy
+							? 'Working…'
+							: notifications.pushStatus === 'enabled'
+								? 'Disable push'
+								: 'Enable push'}
+					</span>
+				</button>
+			{/if}
+		</div>
 
 		<details class="theme">
 			<summary>Theme</summary>
@@ -228,9 +268,68 @@
 		color: var(--muted);
 		font-size: 0.75rem;
 	}
+	.push-panel {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-2);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--surface) 58%, transparent);
+	}
+	.push-state {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+	.push-dot {
+		width: 0.6rem;
+		height: 0.6rem;
+		margin-top: 0.42rem;
+		border-radius: var(--radius-full);
+		background: var(--muted);
+		flex: none;
+	}
+	.push-panel.enabled .push-dot {
+		background: var(--success);
+	}
+	.push-panel.off .push-dot {
+		background: var(--warn);
+	}
+	.push-panel.denied .push-dot {
+		background: var(--danger);
+	}
+	.push-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		min-width: 0;
+	}
+	.push-title {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		color: var(--fg);
+		font-size: 0.78rem;
+		font-weight: var(--font-weight-bold);
+	}
+	.push-detail,
+	.push-error {
+		font-size: 0.72rem;
+		line-height: 1.35;
+		overflow-wrap: anywhere;
+	}
+	.push-detail {
+		color: var(--muted);
+	}
+	.push-error {
+		color: var(--danger);
+	}
 	.push-toggle {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
 		gap: var(--space-2);
 		padding: var(--space-1) var(--space-2);
 		background: transparent;
@@ -245,6 +344,10 @@
 	.push-toggle:hover {
 		color: var(--fg);
 		background: var(--surface);
+	}
+	.push-toggle:disabled {
+		cursor: wait;
+		opacity: 0.65;
 	}
 	.theme summary {
 		cursor: pointer;

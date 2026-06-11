@@ -29,6 +29,7 @@ export interface Notification {
 }
 
 export type PermissionState = 'default' | 'granted' | 'denied' | 'unsupported';
+export type PushStatus = 'unsupported' | 'denied' | 'enabled' | 'off';
 
 function urlBase64ToBuffer(base64: string): ArrayBuffer {
 	const padding = '='.repeat((4 - (base64.length % 4)) % 4);
@@ -47,6 +48,24 @@ class Notifications {
 	permission = $state<PermissionState>('default');
 	/** True once a push subscription is active on this device. */
 	pushEnabled = $state(false);
+	/** True while a permission/subscription request is in flight. */
+	pushBusy = $state(false);
+	/** Last push setup problem, shown in the sidebar so clicks never fail silently. */
+	pushError = $state<string | null>(null);
+
+	/**
+	 * Single, honest description of background-push state for this device,
+	 * combining OS permission with whether a subscription actually exists:
+	 *   unsupported — browser lacks Notification/SW/Push (e.g. http:// LAN)
+	 *   denied      — user blocked notifications; must unblock in browser settings
+	 *   enabled     — permission granted AND a push subscription is registered
+	 *   off         — supported & not blocked, but not yet subscribed
+	 */
+	get pushStatus(): PushStatus {
+		if (this.permission === 'unsupported') return 'unsupported';
+		if (this.permission === 'denied') return 'denied';
+		return this.pushEnabled ? 'enabled' : 'off';
+	}
 
 	#offEvent: (() => void) | null = null;
 	#started = false;
@@ -68,7 +87,7 @@ class Notifications {
 		this.#started = true;
 
 		this.permission =
-			'Notification' in window
+			'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
 				? (window.Notification.permission as PermissionState)
 				: 'unsupported';
 
@@ -227,48 +246,67 @@ class Notifications {
 
 	/** Request permission + register the service worker + subscribe to push. */
 	async enablePush(): Promise<void> {
-		if (!browser) return;
+		if (!browser || this.pushBusy) return;
+		this.pushError = null;
 		if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
 			this.permission = 'unsupported';
+			this.pushError =
+				location.protocol === 'http:' && location.hostname !== 'localhost'
+					? 'Background push needs HTTPS — open this over your domain, not the LAN IP.'
+					: 'This browser does not support Web Push.';
 			return;
 		}
 
-		const perm = await window.Notification.requestPermission();
-		this.permission = perm as PermissionState;
-		if (perm !== 'granted') return;
+		this.pushBusy = true;
+		try {
+			const perm = await window.Notification.requestPermission();
+			this.permission = perm as PermissionState;
+			if (perm !== 'granted') {
+				this.pushError =
+					perm === 'denied'
+						? 'Notifications are blocked. Unblock this site in your browser settings.'
+						: 'Permission was not granted.';
+				return;
+			}
 
-		const reg = await navigator.serviceWorker.register('/sw.js');
-		await navigator.serviceWorker.ready;
+			const reg = await navigator.serviceWorker.register('/sw.js');
+			await navigator.serviceWorker.ready;
 
-		// Fetch the server's VAPID public key.
-		const keyRes = await fetch(apiUrl('/api/notifications/vapid-key'));
-		const { key } = (await keyRes.json()) as { key: string | null };
-		if (!key) {
-			// No VAPID configured on the spine — foreground still works.
-			console.warn('Web Push unavailable: spine has no VAPID key configured.');
-			return;
+			// Fetch the server's VAPID public key.
+			const keyRes = await fetch(apiUrl('/api/notifications/vapid-key'));
+			const { key } = (await keyRes.json()) as { key: string | null };
+			if (!key) {
+				this.pushError =
+					'The Pi has no VAPID key configured. Run `raspy-vapid` and add the keys to config.toml.';
+				return;
+			}
+
+			const sub = await reg.pushManager.subscribe({
+				userVisibleOnly: true,
+				applicationServerKey: urlBase64ToBuffer(key)
+			});
+
+			const json = sub.toJSON();
+			await fetch(apiUrl('/api/notifications/subscribe'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					kind: 'webpush',
+					endpoint: json.endpoint,
+					keys: json.keys ?? {}
+				})
+			});
+			this.pushEnabled = true;
+		} catch (e) {
+			this.pushError = `Could not enable push: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			this.pushBusy = false;
 		}
-
-		const sub = await reg.pushManager.subscribe({
-			userVisibleOnly: true,
-			applicationServerKey: urlBase64ToBuffer(key)
-		});
-
-		const json = sub.toJSON();
-		await fetch(apiUrl('/api/notifications/subscribe'), {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				kind: 'webpush',
-				endpoint: json.endpoint,
-				keys: json.keys ?? {}
-			})
-		});
-		this.pushEnabled = true;
 	}
 
 	async disablePush(): Promise<void> {
 		if (!browser || !('serviceWorker' in navigator)) return;
+		this.pushError = null;
 		const reg = await navigator.serviceWorker.getRegistration();
 		const sub = await reg?.pushManager.getSubscription();
 		if (sub) {

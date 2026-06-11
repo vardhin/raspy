@@ -16,9 +16,14 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from raspy.core import ui
 from raspy.core.contract import AttachmentContext, BaseAttachment
+
+
+class DelayBody(BaseModel):
+    delay: int = Field(default=5, ge=1, le=300)
 
 
 class Notifications(BaseAttachment):
@@ -82,6 +87,19 @@ class Notifications(BaseAttachment):
                 source="notifications",
             )
 
+        @r.post("/test-delayed", status_code=202)
+        async def test_delayed(body: DelayBody | None = None) -> dict[str, Any]:
+            """Fire a test notification after ``delay`` seconds, so you can
+            background the tab/app and watch the *background* push arrive."""
+            delay = max(1, min((body.delay if body else 5), 300))
+            svc().notify_later(
+                float(delay),
+                f"Delayed test (+{delay}s)",
+                "If you backgrounded the app, this came via Web Push 🛰️",
+                source="notifications",
+            )
+            return {"scheduled_in": delay}
+
         return r
 
     def _touch(self) -> None:
@@ -98,31 +116,65 @@ class Notifications(BaseAttachment):
                 ui.surface(
                     level=2,
                     children=[
-                        ui.row(
-                            justify="between",
-                            align="center",
+                        ui.stack(
+                            gap=3,
                             children=[
+                                ui.row(
+                                    justify="between",
+                                    align="center",
+                                    children=[
+                                        ui.text(
+                                            "All notifications from your Pi and its apps.",
+                                            role="muted",
+                                        ),
+                                        ui.row(
+                                            gap=2,
+                                            children=[
+                                                ui.button(
+                                                    "Mark all read",
+                                                    variant="ghost",
+                                                    action=ui.post("read-all"),
+                                                ),
+                                                ui.button(
+                                                    "Clear all",
+                                                    variant="danger",
+                                                    action=ui.post("clear"),
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                ui.divider(),
+                                ui.text("Test delivery", role="label"),
                                 ui.text(
-                                    "All notifications from your Pi and its apps.",
+                                    "Send now appears instantly. Delayed buttons fire after "
+                                    "the countdown — background the app first to see how a "
+                                    "real push notification arrives when no tab is focused.",
                                     role="muted",
                                 ),
                                 ui.row(
                                     gap=2,
+                                    wrap=True,
                                     children=[
                                         ui.button(
-                                            "Send test",
-                                            variant="neutral",
+                                            "Send now",
+                                            variant="accent",
                                             action=ui.post("test"),
                                         ),
                                         ui.button(
-                                            "Mark all read",
-                                            variant="ghost",
-                                            action=ui.post("read-all"),
+                                            "In 5s",
+                                            variant="neutral",
+                                            action=ui.post("test-delayed", body={"delay": 5}),
                                         ),
                                         ui.button(
-                                            "Clear all",
-                                            variant="danger",
-                                            action=ui.post("clear"),
+                                            "In 15s",
+                                            variant="neutral",
+                                            action=ui.post("test-delayed", body={"delay": 15}),
+                                        ),
+                                        ui.button(
+                                            "In 30s",
+                                            variant="neutral",
+                                            action=ui.post("test-delayed", body={"delay": 30}),
                                         ),
                                     ],
                                 ),
