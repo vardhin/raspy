@@ -1,0 +1,110 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Raspy — root ignore. The frontend/ has its own .gitignore for SvelteKit/Bun
+# artifacts; this covers the backend (Python/uv), runtime/secret state, and the
+# editor/OS/mobile cruft that can appear anywhere in the tree.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Secrets & runtime state (NEVER commit) ──────────────────────────────────
+# The spine's data dir: SQLite DBs, signing keys, attachment credentials,
+# session secrets, audit logs. See plan/30-auth-security.md & plan/50-deployment.md.
+data/
+backend/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+config.local.toml
+
+# ── Environment files ───────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.test
+
+# ── Python (backend / the spine) ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+wheels/
+.eggs/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv / packaging
+.uv/
+
+# Test / type / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ── Node / Bun (belt-and-suspenders; frontend/.gitignore is primary) ────────
+node_modules/
+.svelte-kit/
+bun.lockb
+.npm/
+.pnpm-store/
+
+# Vite timestamp files
+vite.config.*.timestamp-*
+
+# ── Mobile (Capacitor / Android — future, see plan/40-frontend.md) ──────────
+# Generated native projects & build outputs; keep source config, drop artifacts.
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/release/
+*.apk
+*.aab
+*.keystore
+*.jks
+ios/App/Pods/
+ios/App/build/
+.capacitor/
+
+# ── Editors / IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ── Claude Code / agent local state ─────────────────────────────────────────
+.claude/
+
+# ── OS cruft ────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Logs & temp ─────────────────────────────────────────────────────────────
+*.log
+logs/
+*.tmp
+*.bak
+*.pid

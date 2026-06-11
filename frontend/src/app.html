@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+		<!-- No-FOUC: set data-color/concept/mode from the persisted choice before
+		     first paint. Full token values apply on hydration; this prevents a
+		     light→dark flash by seeding critical bg/fg via [data-mode] in app.css. -->
+		<script>
+			(function () {
+				try {
+					var raw = localStorage.getItem('raspy.theme');
+					var c = raw ? JSON.parse(raw) : null;
+					var r = document.documentElement;
+					if (c && c.color) r.dataset.color = c.color;
+					if (c && c.concept) r.dataset.concept = c.concept;
+					// crude but flash-free: light theme ids carry "light" or "latte"
+					var id = (c && c.color) || '';
+					r.dataset.mode = /light|latte/.test(id) ? 'light' : 'dark';
+				} catch (e) {
+					document.documentElement.dataset.mode = 'dark';
+				}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
