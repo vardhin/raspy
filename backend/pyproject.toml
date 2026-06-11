@@ -5,6 +5,7 @@ description = "Raspy spine — modular FastAPI control plane for a personal Rasp
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "cryptography>=48.0.1",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",

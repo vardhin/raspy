@@ -164,6 +164,17 @@ def system_stats(*, source: str = "snapshot", title: str | None = None) -> UINod
     return _node("system_stats", title=title, source=source)
 
 
+def mail_client(*, title: str | None = None) -> UINode:
+    """A Gmail-focused mail aggregator UI bound to the mail attachment API.
+
+    The backend attachment owns account credentials, IMAP polling, search, and
+    stored message content. The shell renders this composite node with generic
+    themed controls so the app stays manifest-driven rather than hardcoded as a
+    route.
+    """
+    return _node("mail_client", title=title)
+
+
 # --- action helpers ---------------------------------------------------------
 
 
