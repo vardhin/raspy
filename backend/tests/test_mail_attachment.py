@@ -81,6 +81,40 @@ def test_mail_manual_fetch_stores_and_searches_messages(tmp_path, monkeypatch):
         assert len(by_sender) == 1
 
 
+def test_mail_refetch_does_not_renotify_same_message(tmp_path, monkeypatch):
+    # Regression: INSERT OR IGNORE dedups duplicates, but lastrowid stays pointing
+    # at the prior insert, so the old code re-notified the same mail every poll.
+    msg = mailmod.GmailMessage(
+        uid=99,
+        message_id="<dup@example.com>",
+        subject="Only notify once",
+        sender_name="Asha",
+        sender_email="asha@example.com",
+        sent_at=time.time(),
+        labels=["\\Inbox"],
+        snippet="Hi",
+        body="Hi there",
+    )
+    client, _seen = _client(tmp_path, monkeypatch, [msg])
+    with client:
+        account = client.post(
+            "/api/att/mail/accounts",
+            json={
+                "email": "me@gmail.com",
+                "app_password": "abcdefghijklmnop",
+                "notify": True,
+            },
+        ).json()
+
+        # Two fetches return the same message; only the first is a genuine insert.
+        client.post(f"/api/att/mail/accounts/{account['id']}/fetch")
+        client.post(f"/api/att/mail/accounts/{account['id']}/fetch")
+
+        notes = client.get("/api/notifications").json()["items"]
+        mail_notes = [n for n in notes if n["source"] == "mail"]
+        assert len(mail_notes) == 1
+
+
 def test_mail_delete_account_removes_cached_messages(tmp_path, monkeypatch):
     msg = mailmod.GmailMessage(
         uid=7,

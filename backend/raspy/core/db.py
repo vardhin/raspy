@@ -101,6 +101,23 @@ class Database:
 
         return await asyncio.to_thread(run)
 
+    async def execute_insert_changed(
+        self, sql: str, params: Iterable[Any] = ()
+    ) -> tuple[int, int]:
+        """Execute an INSERT and return ``(rowid, rows_affected)``.
+
+        For ``INSERT OR IGNORE``, ``lastrowid`` is unreliable — SQLite leaves it
+        pointing at the previous successful insert when a row is ignored. Callers
+        that need to distinguish a genuine insert from a no-op (e.g. dedup) must
+        check ``rows_affected``, which is 0 when the row was ignored.
+        """
+
+        def run() -> tuple[int, int]:
+            cur = self._execute(sql, params)
+            return int(cur.lastrowid or 0), int(cur.rowcount or 0)
+
+        return await asyncio.to_thread(run)
+
 
 class ScopedDB:
     """A database handle scoped to one attachment.
@@ -133,3 +150,8 @@ class ScopedDB:
 
     async def execute_insert(self, sql: str, params: Iterable[Any] = ()) -> int:
         return await self._db.execute_insert(sql, params)
+
+    async def execute_insert_changed(
+        self, sql: str, params: Iterable[Any] = ()
+    ) -> tuple[int, int]:
+        return await self._db.execute_insert_changed(sql, params)

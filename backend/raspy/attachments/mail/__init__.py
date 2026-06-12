@@ -424,7 +424,11 @@ class Mail(BaseAttachment):
         inserted = 0
         now = time.time()
         for msg in fetched:
-            new_id = await self.db.execute_insert(
+            # INSERT OR IGNORE dedups on UNIQUE(account_id, uid). Use rows_affected,
+            # not lastrowid, to tell a genuine insert from an ignored duplicate:
+            # SQLite leaves lastrowid pointing at the prior insert when a row is
+            # ignored, which would otherwise re-notify the same mail every poll.
+            new_id, changed = await self.db.execute_insert_changed(
                 f"""
                 INSERT OR IGNORE INTO {table}
                 (account_id, uid, message_id, subject, sender_name, sender_email,
@@ -445,7 +449,7 @@ class Mail(BaseAttachment):
                     now,
                 ),
             )
-            if new_id:
+            if changed:
                 inserted += 1
                 if account["notify"]:
                     await self.notify(

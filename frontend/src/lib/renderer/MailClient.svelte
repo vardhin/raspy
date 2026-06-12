@@ -2,7 +2,7 @@
 	import { getContext, onMount } from 'svelte';
 	import { attAction, attGet, attGetQuery } from '$lib/api';
 	import { connection } from '$lib/connection.svelte';
-	import { Badge, Button, Field, Icon, Stack, Surface, Text } from '$lib/components';
+	import { Badge, Button, Field, Icon, Text } from '$lib/components';
 	import type { RenderContext } from './context.svelte';
 
 	interface MailAccount {
@@ -35,35 +35,42 @@
 		fetched: number;
 	}
 
+	type Tab = 'inbox' | 'search' | 'accounts';
+
 	const ctx = getContext<RenderContext>('render');
+
+	let tab = $state<Tab>('inbox');
 
 	let accounts = $state<MailAccount[]>([]);
 	let messages = $state<MailMessage[]>([]);
-	let selectedId = $state<number | null>(null);
+	let expandedId = $state<number | null>(null);
 	let loading = $state(false);
 	let accountBusy = $state(false);
 	let fetchBusy = $state(false);
+	let togglingNotify = $state(false);
 	let error = $state<string | null>(null);
 
 	let newEmail = $state('');
 	let newPassword = $state('');
 	let notifyNew = $state(false);
+
 	let query = $state('');
 	let sender = $state('');
 	let accountFilter = $state('all');
 
-	const selected = $derived(messages.find((m) => m.id === selectedId) ?? messages[0] ?? null);
+	// A unified mailbox: the inbox tab shows everything, the search tab adds
+	// filters. Both read from the same loaded list so we don't double-fetch.
+	const hasFilters = $derived(
+		query.trim() !== '' || sender.trim() !== '' || accountFilter !== 'all'
+	);
+	const notifyOn = $derived(accounts.length > 0 && accounts.every((a) => a.notify));
 
 	onMount(() => {
 		void loadAll();
 		const off = connection.onEvent((topic) => {
-			if (topic.startsWith(`${ctx.attachmentId}.`) || topic.startsWith('mail.')) void loadAll();
+			if (topic.startsWith(`${ctx.attachmentId}.`) || topic.startsWith('mail.')) void loadAll({ quiet: true });
 		});
-		const timer = setInterval(() => void loadAll({ quiet: true }), 60_000);
-		return () => {
-			off();
-			clearInterval(timer);
-		};
+		return () => off();
 	});
 
 	async function loadAll(opts: { quiet?: boolean } = {}) {
@@ -88,7 +95,7 @@
 		if (sender.trim()) params.sender = sender.trim();
 		if (accountFilter !== 'all') params.account_id = accountFilter;
 		messages = await attGetQuery<MailMessage[]>(ctx.attachmentId, 'messages', params);
-		if (selectedId && !messages.some((m) => m.id === selectedId)) selectedId = null;
+		if (expandedId && !messages.some((m) => m.id === expandedId)) expandedId = null;
 	}
 
 	async function addAccount(e: SubmitEvent) {
@@ -113,12 +120,63 @@
 		}
 	}
 
+	async function patchAccount(id: number, body: Record<string, unknown>) {
+		await attAction(ctx.attachmentId, 'PATCH', `accounts/${id}`, body);
+	}
+
+	async function toggleActive(account: MailAccount) {
+		accountBusy = true;
+		error = null;
+		try {
+			await patchAccount(account.id, { active: !account.active });
+			await loadAccounts();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			accountBusy = false;
+		}
+	}
+
+	async function toggleNotify(account: MailAccount) {
+		accountBusy = true;
+		error = null;
+		try {
+			await patchAccount(account.id, { notify: !account.notify });
+			await loadAccounts();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			accountBusy = false;
+		}
+	}
+
+	// Header toggle: flip notifications for every account at once. This is the
+	// "off switch" — once mail notifications are noisy, one tap silences them all.
+	async function toggleNotifyAll() {
+		if (accounts.length === 0) return;
+		togglingNotify = true;
+		error = null;
+		const next = !notifyOn;
+		try {
+			await Promise.all(
+				accounts
+					.filter((a) => a.notify !== next)
+					.map((a) => patchAccount(a.id, { notify: next }))
+			);
+			await loadAccounts();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			togglingNotify = false;
+		}
+	}
+
 	async function fetchAll() {
 		fetchBusy = true;
 		error = null;
 		try {
 			await attAction(ctx.attachmentId, 'POST', 'fetch');
-			await loadAll();
+			await loadAll({ quiet: true });
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -131,7 +189,7 @@
 		error = null;
 		try {
 			await attAction(ctx.attachmentId, 'POST', `accounts/${id}/fetch`);
-			await loadAll();
+			await loadAll({ quiet: true });
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -153,6 +211,17 @@
 		}
 	}
 
+	function clearSearch() {
+		query = '';
+		sender = '';
+		accountFilter = 'all';
+		void loadMessages();
+	}
+
+	function toggleExpand(id: number) {
+		expandedId = expandedId === id ? null : id;
+	}
+
 	function when(ts: number | null): string {
 		if (!ts) return 'Never';
 		return new Date(ts * 1000).toLocaleString();
@@ -163,15 +232,81 @@
 			? `${message.sender_name} <${message.sender_email}>`
 			: message.sender_email;
 	}
+
+	const tabs: { id: Tab; label: string; icon: string }[] = [
+		{ id: 'inbox', label: 'Inbox', icon: 'mail' },
+		{ id: 'search', label: 'Search', icon: 'search' },
+		{ id: 'accounts', label: 'Accounts', icon: 'user' }
+	];
 </script>
 
 <div class="mail-client">
+	<header class="toolbar">
+		<nav class="tabs" aria-label="Mail views">
+			{#each tabs as t (t.id)}
+				<button class="tab" class:active={tab === t.id} onclick={() => (tab = t.id)}>
+					<Icon name={t.icon} size={16} />
+					<span>{t.label}</span>
+					{#if t.id === 'accounts' && accounts.length > 0}
+						<span class="count">{accounts.length}</span>
+					{/if}
+				</button>
+			{/each}
+		</nav>
+
+		<div class="toolbar-actions">
+			<Button
+				variant={notifyOn ? 'success' : 'neutral'}
+				size="sm"
+				disabled={togglingNotify || accounts.length === 0}
+				onclick={toggleNotifyAll}
+				aria-pressed={notifyOn}
+				title={notifyOn ? 'Notifications on — tap to silence' : 'Notifications off — tap to enable'}
+			>
+				<Icon name={notifyOn ? 'bell' : 'bell-off'} size={15} />
+				{notifyOn ? 'Notify on' : 'Notify off'}
+			</Button>
+			<Button
+				variant="neutral"
+				size="sm"
+				disabled={fetchBusy || accounts.length === 0}
+				onclick={fetchAll}
+			>
+				<Icon name="refresh-cw" size={15} /> Fetch now
+			</Button>
+		</div>
+	</header>
+
 	{#if error}
 		<div class="error">{error}</div>
 	{/if}
 
-	<div class="top-grid">
-		<Surface level={2}>
+	{#if tab === 'search'}
+		<div class="search-bar">
+			<Field type="text" label="Keyword" placeholder="Subject, sender, content" bind:value={query} />
+			<Field type="text" label="Sender" placeholder="person@example.com" bind:value={sender} />
+			<label class="select-wrap">
+				<span>Account</span>
+				<select bind:value={accountFilter}>
+					<option value="all">All accounts</option>
+					{#each accounts as account (account.id)}
+						<option value={String(account.id)}>{account.email}</option>
+					{/each}
+				</select>
+			</label>
+			<div class="search-buttons">
+				<Button variant="neutral" disabled={loading} onclick={() => loadMessages()}>
+					<Icon name="search" size={16} /> Search
+				</Button>
+				{#if hasFilters}
+					<Button variant="ghost" disabled={loading} onclick={clearSearch}>Clear</Button>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
+	{#if tab === 'accounts'}
+		<section class="accounts-view">
 			<form class="account-form" onsubmit={addAccount}>
 				<Field type="email" label="Gmail address" placeholder="name@gmail.com" bind:value={newEmail} />
 				<Field
@@ -185,138 +320,173 @@
 					<Icon name="mail-plus" size={16} /> Add account
 				</Button>
 			</form>
-		</Surface>
 
-		<Surface level={2}>
-			<Stack gap={2}>
-				<div class="section-head">
-					<Text role="label">Accounts</Text>
-					<Button variant="neutral" size="sm" disabled={fetchBusy || accounts.length === 0} onclick={fetchAll}>
-						<Icon name="refresh-cw" size={15} /> Fetch now
-					</Button>
+			{#if accounts.length === 0}
+				<Text role="muted">No accounts configured. Add one above to start polling.</Text>
+			{:else}
+				<div class="accounts">
+					{#each accounts as account (account.id)}
+						<div class="account-card">
+							<div class="account-head">
+								<span class="account-email">{account.email}</span>
+								<Badge variant={account.last_error ? 'danger' : account.active ? 'success' : 'neutral'}>
+									{account.last_error ? 'Error' : account.active ? 'Polling' : 'Paused'}
+								</Badge>
+							</div>
+							<div class="account-meta">Last fetch: {when(account.last_ok)}</div>
+							{#if account.last_error}
+								<div class="account-error">{account.last_error}</div>
+							{/if}
+							<div class="account-controls">
+								<Button
+									variant={account.active ? 'neutral' : 'success'}
+									size="sm"
+									disabled={accountBusy}
+									onclick={() => toggleActive(account)}
+								>
+									<Icon name={account.active ? 'pause' : 'play'} size={14} />
+									{account.active ? 'Pause' : 'Resume'}
+								</Button>
+								<Button
+									variant={account.notify ? 'success' : 'neutral'}
+									size="sm"
+									disabled={accountBusy}
+									onclick={() => toggleNotify(account)}
+								>
+									<Icon name={account.notify ? 'bell' : 'bell-off'} size={14} />
+									{account.notify ? 'Notify' : 'Silent'}
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={fetchBusy}
+									onclick={() => fetchAccount(account.id)}
+								>
+									<Icon name="refresh-cw" size={14} /> Fetch
+								</Button>
+								<Button
+									variant="danger"
+									size="sm"
+									disabled={accountBusy}
+									onclick={() => deleteAccount(account.id)}
+								>
+									<Icon name="trash" size={14} />
+								</Button>
+							</div>
+						</div>
+					{/each}
 				</div>
-				{#if accounts.length === 0}
-					<Text role="muted">No accounts configured.</Text>
-				{:else}
-					<div class="accounts">
-						{#each accounts as account (account.id)}
-							<div class="account-row">
-								<div class="account-main">
-									<div class="account-title">
-										<span>{account.email}</span>
-										<Badge variant={account.last_error ? 'danger' : account.active ? 'success' : 'neutral'}>
-											{account.last_error ? 'Error' : account.active ? 'Polling' : 'Paused'}
-										</Badge>
-									</div>
-									<div class="account-meta">Last fetch: {when(account.last_ok)}</div>
-									{#if account.last_error}
-										<div class="account-error">{account.last_error}</div>
-									{/if}
+			{/if}
+		</section>
+	{:else}
+		<section class="message-list">
+			{#if loading && messages.length === 0}
+				<Text role="muted">Loading…</Text>
+			{:else if messages.length === 0}
+				<Text role="muted">
+					{tab === 'search' && hasFilters ? 'No mail matches your filters.' : 'No mail captured yet.'}
+				</Text>
+			{:else}
+				{#each messages as message (message.id)}
+					{@const open = expandedId === message.id}
+					<article class="message" class:open>
+						<button class="message-row" aria-expanded={open} onclick={() => toggleExpand(message.id)}>
+							<Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
+							<div class="message-body-preview">
+								<div class="message-top">
+									<span class="sender">{senderLabel(message)}</span>
+									<span class="date">{when(message.sent_at)}</span>
 								</div>
-								<div class="account-actions">
-									<Button
-										variant="ghost"
-										size="sm"
-										disabled={fetchBusy}
-										onclick={() => fetchAccount(account.id)}
-									>
-										<Icon name="refresh-cw" size={14} />
-									</Button>
-									<Button
-										variant="danger"
-										size="sm"
-										disabled={accountBusy}
-										onclick={() => deleteAccount(account.id)}
-									>
-										<Icon name="trash" size={14} />
-									</Button>
+								<div class="subject">{message.subject || '(no subject)'}</div>
+								{#if !open}
+									<div class="snippet">{message.snippet}</div>
+								{/if}
+								<div class="message-tags">
+									<Badge variant="info">{message.account_email}</Badge>
+									{#each message.labels.slice(0, 3) as label (label)}
+										<Badge>{label}</Badge>
+									{/each}
 								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</Stack>
-		</Surface>
-	</div>
-
-	<div class="mail-grid">
-		<section class="inbox-panel">
-			<div class="search-row">
-				<Field type="text" label="Keyword" placeholder="Subject, sender, content" bind:value={query} />
-				<Field type="text" label="Sender" placeholder="person@example.com" bind:value={sender} />
-				<label class="select-wrap">
-					<span>Account</span>
-					<select bind:value={accountFilter}>
-						<option value="all">All accounts</option>
-						{#each accounts as account (account.id)}
-							<option value={String(account.id)}>{account.email}</option>
-						{/each}
-					</select>
-				</label>
-				<Button variant="neutral" disabled={loading} onclick={() => loadMessages()}>
-					<Icon name="search" size={16} /> Search
-				</Button>
-			</div>
-
-			<div class="message-list">
-				{#if loading && messages.length === 0}
-					<Text role="muted">Loading…</Text>
-				{:else if messages.length === 0}
-					<Text role="muted">No mail captured yet.</Text>
-				{:else}
-					{#each messages as message (message.id)}
-						<button
-							class="message-row"
-							class:selected={selected?.id === message.id}
-							onclick={() => (selectedId = message.id)}
-						>
-							<div class="message-top">
-								<span class="sender">{senderLabel(message)}</span>
-								<span class="date">{when(message.sent_at)}</span>
-							</div>
-							<div class="subject">{message.subject || '(no subject)'}</div>
-							<div class="snippet">{message.snippet}</div>
-							<div class="message-tags">
-								<Badge variant="info">{message.account_email}</Badge>
-								{#each message.labels.slice(0, 3) as label (label)}
-									<Badge>{label}</Badge>
-								{/each}
 							</div>
 						</button>
-					{/each}
-				{/if}
-			</div>
-		</section>
-
-		<aside class="detail-panel">
-			{#if selected}
-				<div class="detail-head">
-					<div>
-						<div class="detail-subject">{selected.subject || '(no subject)'}</div>
-						<div class="detail-from">{senderLabel(selected)}</div>
-					</div>
-					<Badge variant="info">{selected.account_email}</Badge>
-				</div>
-				<div class="detail-meta">{when(selected.sent_at)}</div>
-				<div class="detail-labels">
-					{#each selected.labels as label (label)}
-						<Badge>{label}</Badge>
-					{/each}
-				</div>
-				<pre class="message-body">{selected.body || selected.snippet}</pre>
-			{:else}
-				<Text role="muted">Select a message.</Text>
+						{#if open}
+							<div class="message-full">
+								<pre class="message-text">{message.body || message.snippet}</pre>
+							</div>
+						{/if}
+					</article>
+				{/each}
 			{/if}
-		</aside>
-	</div>
+		</section>
+	{/if}
 </div>
 
 <style>
 	.mail-client {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-4);
+		gap: var(--space-3);
+		min-height: 0;
 	}
+
+	/* --- toolbar / tabs --- */
+	.toolbar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		flex-wrap: wrap;
+		padding-bottom: var(--space-2);
+		border-bottom: var(--border-width) solid var(--border-color);
+	}
+	.tabs {
+		display: flex;
+		gap: var(--space-1);
+		padding: var(--space-1);
+		background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-lg);
+	}
+	.tab {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		font: inherit;
+		font-weight: var(--font-weight-bold);
+		color: var(--muted);
+		background: transparent;
+		border: var(--border-width) solid transparent;
+		border-radius: var(--radius-md);
+		padding: var(--space-2) var(--space-3);
+		cursor: pointer;
+		transition:
+			background var(--motion-fast) var(--motion-ease),
+			color var(--motion-fast) var(--motion-ease);
+	}
+	.tab:hover {
+		color: var(--fg);
+	}
+	.tab.active {
+		color: var(--accent-fg);
+		background: var(--accent);
+		border-color: var(--border-color);
+		box-shadow: var(--shadow-sm);
+	}
+	.count {
+		font-size: 0.72rem;
+		padding: 0 var(--space-2);
+		border-radius: var(--radius-pill, 999px);
+		background: color-mix(in srgb, var(--fg) 16%, transparent);
+	}
+	.tab.active .count {
+		background: color-mix(in srgb, var(--accent-fg) 28%, transparent);
+	}
+	.toolbar-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
 	.error {
 		color: var(--danger);
 		border: var(--border-width) solid var(--danger);
@@ -324,104 +494,17 @@
 		padding: var(--space-2) var(--space-3);
 		background: color-mix(in srgb, var(--danger) 10%, transparent);
 	}
-	.top-grid {
+
+	/* --- search bar --- */
+	.search-bar {
 		display: grid;
-		grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
-		gap: var(--space-3);
-		align-items: stretch;
-	}
-	.account-form {
-		display: grid;
-		grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+		grid-template-columns: minmax(160px, 1.4fr) minmax(160px, 1fr) minmax(150px, 0.8fr) auto;
 		gap: var(--space-3);
 		align-items: end;
 	}
-	.account-form :global(.field.inline) {
-		align-self: center;
-	}
-	.section-head,
-	.account-title,
-	.message-top,
-	.detail-head,
-	.account-row {
+	.search-buttons {
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
 		gap: var(--space-2);
-	}
-	.accounts {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
-	}
-	.account-row {
-		padding: var(--space-2);
-		border: var(--border-width) solid var(--border-color);
-		border-radius: var(--radius-md);
-		background: color-mix(in srgb, var(--surface) 56%, transparent);
-	}
-	.account-main {
-		min-width: 0;
-	}
-	.account-title {
-		justify-content: flex-start;
-		font-weight: var(--font-weight-bold);
-	}
-	.account-title span:first-child,
-	.sender,
-	.subject,
-	.detail-subject {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.account-meta,
-	.account-error,
-	.date,
-	.snippet,
-	.detail-meta,
-	.detail-from {
-		color: var(--muted);
-		font-size: 0.82rem;
-	}
-	.account-error {
-		color: var(--danger);
-		overflow-wrap: anywhere;
-	}
-	.account-actions,
-	.message-tags,
-	.detail-labels {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: var(--space-1);
-	}
-	.mail-grid {
-		display: grid;
-		grid-template-columns: minmax(320px, 0.92fr) minmax(360px, 1.08fr);
-		gap: var(--space-3);
-		min-height: 38rem;
-	}
-	.inbox-panel,
-	.detail-panel {
-		min-width: 0;
-		border: var(--border-width) solid var(--border-color);
-		border-radius: var(--radius-lg);
-		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 100%), transparent);
-		box-shadow: var(--shadow-md);
-	}
-	.inbox-panel {
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-	.search-row {
-		display: grid;
-		grid-template-columns: minmax(140px, 1fr) minmax(140px, 0.9fr) minmax(130px, 0.7fr) auto;
-		gap: var(--space-2);
-		align-items: end;
-		padding: var(--space-3);
-		border-bottom: var(--border-width) solid var(--border-color);
 	}
 	.select-wrap {
 		display: flex;
@@ -443,41 +526,139 @@
 		box-shadow: var(--shadow-sm);
 		min-height: 2.45rem;
 	}
+
+	/* --- accounts view --- */
+	.accounts-view {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-4);
+	}
+	.account-form {
+		display: grid;
+		grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto auto;
+		gap: var(--space-3);
+		align-items: end;
+		padding: var(--space-3);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-lg);
+		background: color-mix(in srgb, var(--surface) 56%, transparent);
+	}
+	.account-form :global(.field.inline) {
+		align-self: center;
+	}
+	.accounts {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+		gap: var(--space-3);
+	}
+	.account-card {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-lg);
+		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 100%), transparent);
+		box-shadow: var(--shadow-sm);
+	}
+	.account-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		font-weight: var(--font-weight-bold);
+	}
+	.account-email {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.account-controls {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		margin-top: var(--space-1);
+	}
+	.account-meta,
+	.account-error {
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+	.account-error {
+		color: var(--danger);
+		overflow-wrap: anywhere;
+	}
+
+	/* --- message list (inbox + search results) --- */
 	.message-list {
 		display: flex;
 		flex-direction: column;
-		gap: 1px;
-		overflow: auto;
-		padding: var(--space-2);
+		gap: var(--space-2);
+	}
+	.message {
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-lg);
+		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 100%), transparent);
+		overflow: hidden;
+		transition: border-color var(--motion-fast) var(--motion-ease);
+	}
+	.message.open {
+		border-color: color-mix(in srgb, var(--accent) 50%, var(--border-color));
+		box-shadow: var(--shadow-md);
 	}
 	.message-row {
 		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
+		align-items: flex-start;
+		gap: var(--space-3);
 		width: 100%;
-		min-height: 8.5rem;
 		text-align: left;
 		color: var(--fg);
 		background: transparent;
-		border: var(--border-width) solid transparent;
-		border-radius: var(--radius-md);
-		padding: var(--space-3);
+		border: none;
+		padding: var(--space-3) var(--space-4);
 		cursor: pointer;
 	}
-	.message-row:hover,
-	.message-row.selected {
-		background: color-mix(in srgb, var(--accent) 10%, transparent);
-		border-color: color-mix(in srgb, var(--accent) 42%, var(--border-color));
+	.message-row:hover {
+		background: color-mix(in srgb, var(--accent) 8%, transparent);
 	}
-	.sender,
-	.subject,
-	.detail-subject {
+	.message-row :global(svg) {
+		margin-top: 0.15rem;
+		flex: none;
+		color: var(--muted);
+	}
+	.message-body-preview {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		min-width: 0;
+		flex: 1;
+	}
+	.message-top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+	}
+	.sender {
 		font-weight: var(--font-weight-bold);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.date {
 		flex: none;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+	.subject {
+		font-weight: var(--font-weight-bold);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.snippet {
+		color: var(--muted);
+		font-size: 0.86rem;
 		display: -webkit-box;
 		line-clamp: 2;
 		-webkit-line-clamp: 2;
@@ -485,46 +666,32 @@
 		overflow: hidden;
 		line-height: 1.35;
 	}
-	.detail-panel {
+	.message-tags {
 		display: flex;
-		flex-direction: column;
-		gap: var(--space-3);
-		padding: var(--space-4);
-		overflow: hidden;
+		flex-wrap: wrap;
+		gap: var(--space-1);
+		margin-top: var(--space-1);
 	}
-	.detail-head {
-		align-items: flex-start;
+	.message-full {
+		padding: 0 var(--space-4) var(--space-4) calc(var(--space-4) + var(--space-3) + 16px);
+		border-top: var(--border-width) solid var(--border-color);
 	}
-	.detail-subject {
-		font-size: 1.08rem;
-		white-space: normal;
-		overflow-wrap: anywhere;
-	}
-	.message-body {
-		flex: 1;
-		min-height: 20rem;
-		overflow: auto;
+	.message-text {
+		margin: var(--space-3) 0 0;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
-		margin: 0;
 		font: inherit;
-		line-height: 1.5;
+		line-height: 1.55;
 		color: var(--fg);
 	}
 
-	@media (max-width: 1050px) {
-		.top-grid,
-		.mail-grid {
-			grid-template-columns: 1fr;
-		}
-		.mail-grid {
-			min-height: 0;
-		}
-	}
 	@media (max-width: 760px) {
-		.account-form,
-		.search-row {
+		.search-bar,
+		.account-form {
 			grid-template-columns: 1fr;
+		}
+		.toolbar {
+			align-items: flex-start;
 		}
 	}
 </style>
