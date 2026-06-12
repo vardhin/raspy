@@ -45,6 +45,12 @@
 	let messages = $state<MailMessage[]>([]);
 	let expandedId = $state<number | null>(null);
 	let loading = $state(false);
+
+	// Infinite scroll: fetch the inbox 25 at a time, appending the next page as the
+	// user scrolls to the bottom. `hasMore` is false once a page comes back short.
+	const PAGE_SIZE = 25;
+	let loadingMore = $state(false);
+	let hasMore = $state(true);
 	let accountBusy = $state(false);
 	let fetchBusy = $state(false);
 	let togglingNotify = $state(false);
@@ -77,7 +83,10 @@
 		if (!opts.quiet) loading = true;
 		error = null;
 		try {
-			await Promise.all([loadAccounts(), loadMessages()]);
+			// A background refresh (new mail arrived / reconnect) keeps the user's scroll
+			// depth by re-pulling as many messages as are currently loaded; a foreground
+			// load starts fresh at the first page.
+			await Promise.all([loadAccounts(), loadMessages({ keepDepth: opts.quiet })]);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -89,13 +98,55 @@
 		accounts = await attGet<MailAccount[]>(ctx.attachmentId, 'accounts');
 	}
 
-	async function loadMessages() {
-		const params: Record<string, string> = { limit: '200' };
+	// Build the query for one page. The active filters (search keyword/sender/account)
+	// are shared by the inbox and search tabs.
+	function pageParams(offset: number, limit: number): Record<string, string> {
+		const params: Record<string, string> = {
+			limit: String(limit),
+			offset: String(offset)
+		};
 		if (query.trim()) params.q = query.trim();
 		if (sender.trim()) params.sender = sender.trim();
 		if (accountFilter !== 'all') params.account_id = accountFilter;
-		messages = await attGetQuery<MailMessage[]>(ctx.attachmentId, 'messages', params);
+		return params;
+	}
+
+	// Replace the list from the top. By default that's the first page (25); a
+	// depth-preserving refresh re-pulls however many are already loaded.
+	async function loadMessages(opts: { keepDepth?: boolean } = {}) {
+		// Backend caps a single page at 500; a deeper refresh just trims to that.
+		const limit = opts.keepDepth ? Math.min(500, Math.max(PAGE_SIZE, messages.length)) : PAGE_SIZE;
+		const page = await attGetQuery<MailMessage[]>(
+			ctx.attachmentId,
+			'messages',
+			pageParams(0, limit)
+		);
+		messages = page;
+		hasMore = page.length === limit;
 		if (expandedId && !messages.some((m) => m.id === expandedId)) expandedId = null;
+	}
+
+	// Next page: append. Guarded so concurrent scroll events don't double-fetch.
+	async function loadMore() {
+		if (loadingMore || !hasMore || loading) return;
+		loadingMore = true;
+		try {
+			const page = await attGetQuery<MailMessage[]>(
+				ctx.attachmentId,
+				'messages',
+				pageParams(messages.length, PAGE_SIZE)
+			);
+			// Drop any ids we already hold (a new mail arriving up top can shift the
+			// offset window by one); keeps the appended page free of duplicates.
+			const seen = new Set(messages.map((m) => m.id));
+			const fresh = page.filter((m) => !seen.has(m.id));
+			messages = [...messages, ...fresh];
+			hasMore = page.length === PAGE_SIZE;
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			loadingMore = false;
+		}
 	}
 
 	async function addAccount(e: SubmitEvent) {
@@ -226,6 +277,73 @@
 		if (!ts) return 'Never';
 		return new Date(ts * 1000).toLocaleString();
 	}
+
+	// --- day grouping (inbox) ---
+	// Which day is selected in the inbox day-bar: a `YYYY-MM-DD` key, or 'all'.
+	let selectedDay = $state('all');
+
+	// Local-day key for a message timestamp (so days split at the user's midnight).
+	function dayKey(ts: number | null): string {
+		if (!ts) return 'unknown';
+		const d = new Date(ts * 1000);
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+	}
+	function dayKeyOf(d: Date): string {
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+	}
+	// Short, friendly label for a day chip: Today / Yesterday / "Mon 12 Jun".
+	function dayLabel(key: string): string {
+		if (key === 'unknown') return 'Undated';
+		const today = dayKeyOf(new Date());
+		const yesterday = dayKeyOf(new Date(Date.now() - 86400000));
+		if (key === today) return 'Today';
+		if (key === yesterday) return 'Yesterday';
+		const [y, m, d] = key.split('-').map(Number);
+		const dt = new Date(y, m - 1, d);
+		return dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+	}
+
+	// Days present in the loaded mail, newest first, each with its message count.
+	const days = $derived.by(() => {
+		const counts = new Map<string, number>();
+		for (const m of messages) {
+			const k = dayKey(m.sent_at);
+			counts.set(k, (counts.get(k) ?? 0) + 1);
+		}
+		return [...counts.entries()]
+			.sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)) // newest day first
+			.map(([key, count]) => ({ key, count, label: dayLabel(key) }));
+	});
+
+	// Messages shown in the list. The day filter applies only on the inbox tab; the
+	// search tab has its own filters and ignores the selected day.
+	const visibleMessages = $derived(
+		tab !== 'inbox' || selectedDay === 'all'
+			? messages
+			: messages.filter((m) => dayKey(m.sent_at) === selectedDay)
+	);
+
+	// If the selected day disappears (e.g. after a reload/filter), fall back to All.
+	$effect(() => {
+		if (selectedDay !== 'all' && !days.some((d) => d.key === selectedDay)) selectedDay = 'all';
+	});
+
+	// Infinite scroll: watch a sentinel at the end of the list and pull the next page
+	// when it nears the viewport. `rootMargin` pre-loads slightly before the bottom so
+	// scrolling feels seamless.
+	let sentinel = $state<HTMLElement | undefined>();
+	$effect(() => {
+		const el = sentinel;
+		if (!el) return;
+		const io = new IntersectionObserver(
+			(entries) => {
+				if (entries[0]?.isIntersecting) void loadMore();
+			},
+			{ rootMargin: '400px 0px' }
+		);
+		io.observe(el);
+		return () => io.disconnect();
+	});
 
 	function senderLabel(message: MailMessage): string {
 		return message.sender_name
@@ -380,17 +498,42 @@
 		</section>
 	{:else}
 		<section class="message-list">
+			{#if tab === 'inbox' && days.length > 0}
+				<!-- Day bar: filter the inbox to a single day. Scrolls horizontally so it
+				     stays usable on narrow screens. -->
+				<nav class="day-bar" aria-label="Filter by day">
+					<button
+						class="day-chip"
+						class:active={selectedDay === 'all'}
+						onclick={() => (selectedDay = 'all')}
+					>
+						All <span class="day-count">{messages.length}</span>
+					</button>
+					{#each days as d (d.key)}
+						<button
+							class="day-chip"
+							class:active={selectedDay === d.key}
+							onclick={() => (selectedDay = d.key)}
+						>
+							{d.label} <span class="day-count">{d.count}</span>
+						</button>
+					{/each}
+				</nav>
+			{/if}
+
 			{#if loading && messages.length === 0}
 				<Text role="muted">Loading…</Text>
 			{:else if messages.length === 0}
 				<Text role="muted">
 					{tab === 'search' && hasFilters ? 'No mail matches your filters.' : 'No mail captured yet.'}
 				</Text>
+			{:else if visibleMessages.length === 0}
+				<Text role="muted">No mail on {dayLabel(selectedDay)}.</Text>
 			{:else}
 				<!-- One accordion: every mail is a divider-separated section; opening one
 				     closes the others (single `expandedId`). -->
 				<Accordion>
-					{#each messages as message (message.id)}
+					{#each visibleMessages as message (message.id)}
 						{@const open = expandedId === message.id}
 						{@const body = message.body || message.snippet}
 						<AccordionItem {open} ontoggle={() => toggleExpand(message.id)} bodyText={body}>
@@ -419,6 +562,18 @@
 						</AccordionItem>
 					{/each}
 				</Accordion>
+
+				<!-- Infinite-scroll trigger + status. The sentinel is observed while more
+				     pages remain; once exhausted we show a quiet end-of-list note. -->
+				{#if hasMore}
+					<div class="load-more" bind:this={sentinel}>
+						<Text role="muted">{loadingMore ? 'Loading more…' : 'Scroll for more'}</Text>
+					</div>
+				{:else if messages.length > PAGE_SIZE}
+					<div class="load-more">
+						<Text role="muted">That's everything.</Text>
+					</div>
+				{/if}
 			{/if}
 		</section>
 	{/if}
@@ -593,6 +748,65 @@
 	}
 
 	/* --- message list (inbox + search results) --- */
+	.message-list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+
+	.load-more {
+		display: flex;
+		justify-content: center;
+		padding: var(--space-3);
+	}
+
+	/* --- day bar (inbox) --- */
+	.day-bar {
+		display: flex;
+		gap: var(--space-2);
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+		padding-bottom: var(--space-1);
+		scrollbar-width: thin;
+	}
+	.day-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		flex: none;
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: var(--font-weight-bold);
+		color: var(--muted);
+		background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-pill, 999px);
+		padding: var(--space-1) var(--space-3);
+		cursor: pointer;
+		white-space: nowrap;
+		transition:
+			background var(--motion-fast) var(--motion-ease),
+			color var(--motion-fast) var(--motion-ease),
+			border-color var(--motion-fast) var(--motion-ease);
+	}
+	.day-chip:hover {
+		color: var(--fg);
+	}
+	.day-chip.active {
+		color: var(--accent-fg);
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+	.day-count {
+		font-size: 0.72rem;
+		padding: 0 var(--space-2);
+		border-radius: var(--radius-pill, 999px);
+		background: color-mix(in srgb, var(--fg) 16%, transparent);
+	}
+	.day-chip.active .day-count {
+		background: color-mix(in srgb, var(--accent-fg) 28%, transparent);
+	}
+
 	/* The list is one Accordion: its single bordered container and the per-row
 	   dividers/open-state/header-hover come from the Accordion components. Here we
 	   only style the header content. */

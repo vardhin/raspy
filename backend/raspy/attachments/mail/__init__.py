@@ -238,6 +238,7 @@ class Mail(BaseAttachment):
             sender: str = Query(default=""),
             account_id: int | None = Query(default=None),
             limit: int = Query(default=100, ge=1, le=500),
+            offset: int = Query(default=0, ge=0),
         ) -> list[dict[str, Any]]:
             where = ["1 = 1"]
             params: list[Any] = []
@@ -255,7 +256,10 @@ class Mail(BaseAttachment):
             if account_id is not None:
                 where.append("m.account_id = ?")
                 params.append(account_id)
+            # Page through the newest-first list with limit + offset. The ordering is
+            # fully deterministic (sent_at, then id) so a page boundary is stable.
             params.append(limit)
+            params.append(offset)
             rows = await self.db.fetch_all(
                 f"""
                 SELECT m.*, a.email AS account_email
@@ -263,7 +267,7 @@ class Mail(BaseAttachment):
                 JOIN {accounts} a ON a.id = m.account_id
                 WHERE {' AND '.join(where)}
                 ORDER BY m.sent_at DESC, m.id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
                 params,
             )

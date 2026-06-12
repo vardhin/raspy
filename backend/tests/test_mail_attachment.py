@@ -138,3 +138,54 @@ def test_mail_delete_account_removes_cached_messages(tmp_path, monkeypatch):
 
         assert client.delete(f"/api/att/mail/accounts/{account['id']}").status_code == 204
         assert client.get("/api/att/mail/messages").json() == []
+
+
+def test_mail_messages_paginate_with_limit_and_offset(tmp_path, monkeypatch):
+    # 30 messages with strictly increasing sent_at, so the newest-first ordering is
+    # deterministic and pages line up cleanly.
+    base = time.time()
+    inbox = [
+        mailmod.GmailMessage(
+            uid=i,
+            message_id=f"<m{i}@example.com>",
+            subject=f"Message {i}",
+            sender_name="Sender",
+            sender_email="sender@example.com",
+            sent_at=base + i,
+            labels=["\\Inbox"],
+            snippet=f"snippet {i}",
+            body=f"body {i}",
+        )
+        for i in range(30)
+    ]
+    client, _seen = _client(tmp_path, monkeypatch, inbox)
+    with client:
+        account = client.post(
+            "/api/att/mail/accounts",
+            json={"email": "me@gmail.com", "app_password": "abcdefghijklmnop"},
+        ).json()
+        client.post(f"/api/att/mail/accounts/{account['id']}/fetch")
+
+        # First page of 25 — newest first (uid 29 down to 5).
+        page1 = client.get(
+            "/api/att/mail/messages", params={"limit": 25, "offset": 0}
+        ).json()
+        assert len(page1) == 25
+        assert page1[0]["subject"] == "Message 29"
+        assert page1[-1]["subject"] == "Message 5"
+
+        # Second page — the remaining 5, no overlap with page 1.
+        page2 = client.get(
+            "/api/att/mail/messages", params={"limit": 25, "offset": 25}
+        ).json()
+        assert len(page2) == 5
+        assert page2[0]["subject"] == "Message 4"
+        assert page2[-1]["subject"] == "Message 0"
+
+        page1_ids = {m["id"] for m in page1}
+        assert page1_ids.isdisjoint({m["id"] for m in page2})
+
+        # Past the end yields an empty page (signals "no more" to the client).
+        assert client.get(
+            "/api/att/mail/messages", params={"limit": 25, "offset": 30}
+        ).json() == []
