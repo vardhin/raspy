@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import Settings, get_settings
-from . import manifest, notifications, system, ws
+from . import manifest, notifications, static, system, ws
 from .db import Database
 from .events import EventBus
 from .notifications import NotificationService
@@ -79,5 +79,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(manifest.router, prefix="/api")
     app.include_router(ws.router, prefix="/api")
     app.include_router(notifications.router, prefix="/api")
+
+    # Frontend last: the SPA catch-all must not shadow the /api routes above.
+    static.mount_frontend(app, settings.static_dir)
 
     return app

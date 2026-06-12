@@ -5,8 +5,10 @@
 # static bundle to frontend/build/. We serve it with `vite preview`, which honors
 # the SPA fallback (index.html) needed for client-side routes like /a/[name].
 #
-# In production the spine (backend FastAPI) serves these same files — this script
-# is for local dev/preview. Use serve.sh to skip the build and serve what's there.
+# In production the spine (backend FastAPI) serves these same files directly —
+# use scripts/build-frontend.sh for that. THIS script is local dev/preview only
+# (it runs vite preview, a Node server). Use serve.sh to skip the build and serve
+# what's already there.
 #
 # Usage:
 #   scripts/build-and-serve.sh                # build, then preview on default host/port

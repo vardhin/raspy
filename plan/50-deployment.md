@@ -75,8 +75,11 @@ swap to the static IP's Caddy later) — clients don't care, the domain is stabl
 - `git pull && uv sync && systemctl restart raspy` — or a small `deploy.sh`.
 - Attachments can be enabled/disabled via config without code changes; a broken
   attachment is isolated, not fatal ([20-attachments.md](20-attachments.md) §3).
-- Frontend: `npm run build` produces the static bundle; copy into the spine's
-  served-assets dir. APK: `npx cap sync &&` build in Android Studio / CI when you
+- Frontend: `scripts/build-frontend.sh` produces the static bundle at
+  `frontend/build/`, which the spine serves **in place** at the root path (see
+  `backend/raspy/core/static.py`). Deploy = `scripts/build-frontend.sh &&
+  systemctl restart raspy`. Override the served dir with `RASPY_STATIC_DIR` if you
+  relocate the bundle. APK: `npx cap sync &&` build in Android Studio / CI when you
   cut a phone release.
 
 ## 5. Backups

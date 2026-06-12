@@ -17,6 +17,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Repo-relative default data dir: backend/data/ (gitignored).
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
+# Repo-relative default static bundle: the SvelteKit build output the spine
+# serves in production. backend/raspy/ -> ../../frontend/build.
+_DEFAULT_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "build"
+
 
 class Settings(BaseSettings):
     """Runtime settings for the spine."""
@@ -32,6 +36,12 @@ class Settings(BaseSettings):
 
     # Where SQLite, secrets and per-attachment data live.
     data_dir: Path = _DEFAULT_DATA_DIR
+
+    # The built SvelteKit bundle the spine serves at the root path (everything
+    # not under /api/). Defaults to the repo's frontend/build/, served in place;
+    # override with RASPY_STATIC_DIR. If the dir is absent (e.g. frontend not
+    # built yet), the spine still runs and the API works — only the UI is 404.
+    static_dir: Path = _DEFAULT_STATIC_DIR
 
     # Attachments explicitly disabled by id (everything discovered is enabled
     # by default). Lets you turn one off without removing the package.
