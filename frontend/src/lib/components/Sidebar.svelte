@@ -10,6 +10,10 @@
 	import { connection, type LinkState } from '$lib/connection.svelte';
 	import { notifications, type PushStatus } from '$lib/notifications/store.svelte';
 
+	// `onClose`, when provided, renders the in-drawer close button (mobile only) and
+	// is also fired when a nav link is tapped so the drawer dismisses on navigation.
+	let { onClose }: { onClose?: () => void } = $props();
+
 	async function togglePush() {
 		if (notifications.pushEnabled) await notifications.disablePush();
 		else await notifications.enablePush();
@@ -62,10 +66,15 @@
 	<div class="brand">
 		<span class="dot {overall}" title={stateLabel[overall]}></span>
 		<span class="brand-name">Raspy</span>
+		{#if onClose}
+			<button class="drawer-close" aria-label="Close menu" onclick={onClose}>
+				<Icon name="x" size={20} />
+			</button>
+		{/if}
 	</div>
 
 	<nav class="nav">
-		<a class="item" class:active={active('/')} href="/">
+		<a class="item" class:active={active('/')} href="/" onclick={onClose}>
 			<Icon name="home" />
 			<span>Dashboard</span>
 		</a>
@@ -80,7 +89,7 @@
 			<div class="empty">No apps {manifest.error ? '(offline)' : 'installed'}.</div>
 		{:else}
 			{#each manifest.attachments as app (app.id)}
-				<a class="item" class:active={active(`/a/${app.id}`)} href="/a/{app.id}">
+				<a class="item" class:active={active(`/a/${app.id}`)} href="/a/{app.id}" onclick={onClose}>
 					<Icon name={app.icon} />
 					<span>{app.title}</span>
 					{#if app.id === 'notifications' && notifications.unread > 0}
@@ -165,6 +174,22 @@
 	.brand-name {
 		font-weight: var(--font-weight-bold);
 		font-size: 1.05rem;
+	}
+	.drawer-close {
+		display: none;
+		margin-left: auto;
+		align-items: center;
+		justify-content: center;
+		padding: var(--space-1);
+		background: transparent;
+		color: var(--muted);
+		border: none;
+		border-radius: var(--radius-md);
+		cursor: pointer;
+	}
+	.drawer-close:hover {
+		color: var(--fg);
+		background: var(--surface);
 	}
 	.count {
 		margin-left: auto;
@@ -362,12 +387,15 @@
 
 	@media (max-width: 720px) {
 		.sidebar {
+			/* Inside the drawer the sidebar fills the panel; the drawer (in the
+			   layout) owns positioning, width, and the slide animation. */
 			width: 100%;
-			height: auto;
+			height: 100%;
 			position: static;
-			flex-direction: column;
 			border-right: none;
-			border-bottom: var(--border-width) solid var(--border-color);
+		}
+		.drawer-close {
+			display: inline-flex;
 		}
 	}
 </style>

@@ -122,24 +122,26 @@
 	{/if}
 {:else if node.type === 'table'}
 	{@const rows = (ctx.sources[node.source ?? ''] ?? []) as Record<string, unknown>[]}
-	<table class="table">
-		<thead>
-			<tr>
-				{#each node.columns ?? [] as col (col.key)}
-					<th>{col.label}</th>
-				{/each}
-			</tr>
-		</thead>
-		<tbody>
-			{#each rows as r (r[node.key ?? 'id'])}
+	<div class="table-scroll">
+		<table class="table">
+			<thead>
 				<tr>
 					{#each node.columns ?? [] as col (col.key)}
-						<td>{String(r[col.key] ?? '')}</td>
+						<th>{col.label}</th>
 					{/each}
 				</tr>
-			{/each}
-		</tbody>
-	</table>
+			</thead>
+			<tbody>
+				{#each rows as r (r[node.key ?? 'id'])}
+					<tr>
+						{#each node.columns ?? [] as col (col.key)}
+							<td>{String(r[col.key] ?? '')}</td>
+						{/each}
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
 {:else if node.type === 'file_manager'}
 	<FileManager {node} />
 {:else if node.type === 'mail_client'}
@@ -161,6 +163,11 @@
 		width: 1.15rem;
 		height: 1.15rem;
 		accent-color: var(--accent);
+	}
+	.table-scroll {
+		width: 100%;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
 	}
 	.table {
 		width: 100%;

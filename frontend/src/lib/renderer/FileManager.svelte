@@ -442,6 +442,17 @@
 	.cell:focus-within .row-actions {
 		opacity: 1;
 	}
+	/* Touch devices have no hover, so reveal the row actions permanently —
+	   otherwise download/rename/delete are unreachable on a phone. */
+	@media (hover: none) {
+		.row-actions {
+			opacity: 1;
+		}
+		.act {
+			/* Comfortable tap targets. */
+			padding: var(--space-2);
+		}
+	}
 	.act {
 		display: inline-flex;
 		align-items: center;

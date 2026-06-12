@@ -691,7 +691,31 @@
 			grid-template-columns: 1fr;
 		}
 		.toolbar {
+			align-items: stretch;
+		}
+		/* Tabs scroll horizontally instead of wrapping into a tall block, and the
+		   action buttons grow to fill the row so they're easy to tap. */
+		.tabs {
+			overflow-x: auto;
+			-webkit-overflow-scrolling: touch;
+		}
+		.tab {
+			flex: none;
+		}
+		.toolbar-actions {
+			flex-wrap: wrap;
+		}
+		.toolbar-actions :global(.btn) {
+			flex: 1;
+		}
+		/* Sender/date stack so neither truncates awkwardly on a narrow screen. */
+		.message-top {
+			flex-direction: column;
 			align-items: flex-start;
+			gap: 2px;
+		}
+		.message-full {
+			padding-left: var(--space-4);
 		}
 	}
 </style>
