@@ -11,3 +11,5 @@ export { default as Sidebar } from './Sidebar.svelte';
 export { default as Modal } from './Modal.svelte';
 export { default as Accordion } from './Accordion.svelte';
 export { default as AccordionItem } from './AccordionItem.svelte';
+export { default as PasswordLogin } from './PasswordLogin.svelte';
+export { default as PinUnlock } from './PinUnlock.svelte';

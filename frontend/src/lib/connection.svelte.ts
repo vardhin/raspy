@@ -101,6 +101,7 @@ class Connection {
 	async #poll(): Promise<void> {
 		try {
 			const res = await fetch(apiUrl('/api/healthz'), {
+				credentials: 'include',
 				headers: { accept: 'application/json' }
 			});
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);

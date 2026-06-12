@@ -25,8 +25,19 @@ def _client(tmp_path: Path, monkeypatch, messages: list[mailmod.GmailMessage]):
     monkeypatch.setattr(mailmod, "test_gmail_login", fake_login)
     monkeypatch.setattr(mailmod, "fetch_gmail_messages", fake_fetch)
 
-    app = create_app(Settings(data_dir=tmp_path))
-    return TestClient(app), seen
+    from conftest import auth_settings, login
+
+    app = create_app(auth_settings(tmp_path))
+
+    class _AuthClient(TestClient):
+        # Log in automatically once the lifespan (which runs auth.init) is up,
+        # so the existing `with client:` blocks gain an authenticated session.
+        def __enter__(self):
+            super().__enter__()
+            login(self)
+            return self
+
+    return _AuthClient(app), seen
 
 
 def test_mail_account_password_is_backend_only(tmp_path, monkeypatch):

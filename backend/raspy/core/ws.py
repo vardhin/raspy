@@ -12,13 +12,38 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .auth.deps import ACCESS_COOKIE
+from .auth.service import AuthError
+
 log = logging.getLogger("raspy.ws")
 
 router = APIRouter()
 
 
+def _ws_access_token(ws: WebSocket) -> str | None:
+    """Token from the access cookie (web) or the `?access_token=` query param
+    (native clients that can't set cookies on the WS handshake)."""
+    cookie = ws.cookies.get(ACCESS_COOKIE)
+    if cookie:
+        return cookie
+    return ws.query_params.get("access_token") or None
+
+
 @router.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    # Authenticate before accepting. Closing with 1008 (policy violation) tells
+    # the client to re-auth rather than blindly retry.
+    auth = getattr(ws.app.state, "auth", None)
+    token = _ws_access_token(ws)
+    if auth is None or not token:
+        await ws.close(code=1008)
+        return
+    try:
+        auth.verify_access(token)
+    except AuthError:
+        await ws.close(code=1008)
+        return
+
     await ws.accept()
     bus = ws.app.state.events
     queue = bus.subscribe()

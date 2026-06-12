@@ -33,11 +33,69 @@ export interface ApiError extends Error {
 	status?: number;
 }
 
+/** Read the readable CSRF cookie to echo on mutating cookie-auth requests. */
+function csrfCookie(): string | null {
+	if (typeof document === 'undefined') return null;
+	const m = document.cookie.match(/(?:^|;\s*)raspy_csrf=([^;]+)/);
+	return m ? decodeURIComponent(m[1]) : null;
+}
+
+const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Hook the auth store calls when a request can't be authenticated even after a
+ *  refresh. Set by auth.svelte to avoid an import cycle. */
+let onAuthLost: ((needs: 'pin' | 'password') => void) | null = null;
+export function setAuthLostHandler(fn: (needs: 'pin' | 'password') => void): void {
+	onAuthLost = fn;
+}
+
+let refreshing: Promise<boolean> | null = null;
+
+/** Try one cookie refresh; collapse concurrent callers onto one in-flight call. */
+async function tryRefresh(): Promise<boolean> {
+	if (!refreshing) {
+		refreshing = fetch(apiUrl('/api/auth/refresh'), {
+			method: 'POST',
+			credentials: 'include',
+			headers: { ...(csrfCookie() ? { 'x-csrf-token': csrfCookie()! } : {}) }
+		})
+			.then((r) => r.ok)
+			.catch(() => false)
+			.finally(() => {
+				refreshing = null;
+			});
+	}
+	return refreshing;
+}
+
+async function rawFetch(url: string, init?: RequestInit): Promise<Response> {
+	const method = (init?.method ?? 'GET').toUpperCase();
+	const headers: Record<string, string> = {
+		accept: 'application/json',
+		...((init?.headers as Record<string, string>) ?? {})
+	};
+	// Double-submit CSRF on mutating cookie-auth requests.
+	if (MUTATING.has(method)) {
+		const csrf = csrfCookie();
+		if (csrf) headers['x-csrf-token'] = csrf;
+	}
+	return fetch(url, { ...init, credentials: 'include', headers });
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(url, {
-		...init,
-		headers: { accept: 'application/json', ...(init?.headers ?? {}) }
-	});
+	let res = await rawFetch(url, init);
+	// On 401, attempt exactly one silent refresh, then retry once. Auth endpoints
+	// themselves are excluded (they manage their own flow).
+	if (res.status === 401 && !url.includes('/api/auth/')) {
+		if (await tryRefresh()) {
+			res = await rawFetch(url, init);
+		}
+		if (res.status === 401) {
+			// Still unauthenticated — ask the server what screen to show next.
+			const needs = await sessionNeeds();
+			onAuthLost?.(needs === 'pin' ? 'pin' : 'password');
+		}
+	}
 	if (!res.ok) {
 		const err: ApiError = new Error(`${init?.method ?? 'GET'} ${url} -> ${res.status}`);
 		err.status = res.status;
@@ -46,6 +104,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 	if (res.status === 204) return undefined as T;
 	const text = await res.text();
 	return (text ? JSON.parse(text) : undefined) as T;
+}
+
+async function sessionNeeds(): Promise<string> {
+	try {
+		const r = await fetch(apiUrl('/api/auth/session'), { credentials: 'include' });
+		return (await r.json()).needs ?? 'password';
+	} catch {
+		return 'password';
+	}
 }
 
 /** GET a list/object from an attachment's API (relative path). */
@@ -136,7 +203,9 @@ export async function attPreview(
 	attachmentId: string,
 	path: string
 ): Promise<{ contentType: string; text: string; status: number }> {
-	const res = await fetch(attResourceUrl(attachmentId, 'preview', { path }));
+	const res = await fetch(attResourceUrl(attachmentId, 'preview', { path }), {
+		credentials: 'include'
+	});
 	const contentType = res.headers.get('content-type') ?? '';
 	const text = res.ok && contentType.startsWith('text/') ? await res.text() : '';
 	return { contentType, text, status: res.status };

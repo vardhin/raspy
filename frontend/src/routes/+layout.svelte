@@ -7,9 +7,39 @@
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
-	import { Sidebar, Icon } from '$lib/components';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock } from '$lib/components';
+	import { auth } from '$lib/auth.svelte';
+	import { setAuthLostHandler } from '$lib/api';
 
 	let { children } = $props();
+
+	// Route 401s (after a failed silent refresh) back into the gate.
+	setAuthLostHandler((needs) => auth.onAuthLost(needs));
+
+	// Lazily start the live services the first time we become authenticated, and
+	// only once. They must not start before auth (the WS would be rejected 1008).
+	let servicesStarted = false;
+	function startServicesOnce() {
+		if (servicesStarted) return;
+		servicesStarted = true;
+		manifest.load();
+		connection.start();
+		notifications.start();
+	}
+
+	// When the tab regains focus, re-check the session: if the access token
+	// lapsed while we were away, this flips us to the PIN screen ("out of focus →
+	// mini PIN"). Only meaningful while we believe we're active.
+	function onVisible() {
+		if (typeof document === 'undefined') return;
+		if (document.visibilityState === 'visible' && auth.state === 'active') {
+			void auth.refresh();
+		}
+	}
+
+	$effect(() => {
+		if (auth.state === 'active') startServicesOnce();
+	});
 
 	// Mobile off-canvas drawer state. The sidebar is always in the DOM; on mobile a
 	// CSS transform slides it off-screen until `drawerOpen` is set. It auto-closes on
@@ -28,10 +58,10 @@
 	// leaving the badge stuck on "connecting".
 	onMount(() => {
 		theme.init();
-		manifest.load();
-		connection.start();
-		// Start after connection: the store subscribes to WS notification events.
-		notifications.start();
+		// Ask the server what to show (active / pin / password). Services start
+		// only once we reach 'active' (see the $effect above).
+		void auth.refresh();
+		document.addEventListener('visibilitychange', onVisible);
 	});
 
 	// Revalidate the manifest whenever the WS reconnects after a drop, and refetch
@@ -45,6 +75,9 @@
 		offReconnect();
 		notifications.stop();
 		connection.stop();
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', onVisible);
+		}
 	});
 
 	// Prevent the page behind the drawer from scrolling while it's open.
@@ -61,6 +94,13 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
+{#if auth.state === 'loading'}
+	<div class="gate-loading"></div>
+{:else if auth.state === 'password'}
+	<PasswordLogin />
+{:else if auth.state === 'pin'}
+	<PinUnlock />
+{:else}
 <div class="shell" class:drawer-open={drawerOpen}>
 	<!-- Mobile-only top bar with the hamburger. Hidden at desktop widths. -->
 	<header class="topbar">
@@ -86,8 +126,12 @@
 		{@render children()}
 	</main>
 </div>
+{/if}
 
 <style>
+	.gate-loading {
+		min-height: 100dvh;
+	}
 	.shell {
 		display: flex;
 		align-items: flex-start;

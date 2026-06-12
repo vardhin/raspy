@@ -86,10 +86,12 @@ def mount_frontend(app: FastAPI, static_dir: Path) -> None:
             and not path.startswith("/_app")
         ):
             return FileResponse(index)
-        # Preserve normal error responses (API 404s stay JSON, etc.).
+        # Preserve normal error responses (API 404s stay JSON, etc.), including
+        # any headers the raiser set (e.g. Retry-After on a 429 lockout).
         return JSONResponse(
             {"detail": exc.detail if exc.detail is not None else ""},
             status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
         )
 
     log.info("serving frontend bundle from %s", static_dir)
