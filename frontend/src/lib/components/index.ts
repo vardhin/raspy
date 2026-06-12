@@ -10,3 +10,4 @@ export { default as ThemePicker } from './ThemePicker.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
 export { default as Modal } from './Modal.svelte';
 export { default as Accordion } from './Accordion.svelte';
+export { default as AccordionItem } from './AccordionItem.svelte';

@@ -2,7 +2,7 @@
 	import { getContext, onMount } from 'svelte';
 	import { attAction, attGet, attGetQuery } from '$lib/api';
 	import { connection } from '$lib/connection.svelte';
-	import { Accordion, Badge, Button, Field, Icon, Text } from '$lib/components';
+	import { Accordion, AccordionItem, Badge, Button, Field, Icon, Text } from '$lib/components';
 	import type { RenderContext } from './context.svelte';
 
 	interface MailAccount {
@@ -387,34 +387,38 @@
 					{tab === 'search' && hasFilters ? 'No mail matches your filters.' : 'No mail captured yet.'}
 				</Text>
 			{:else}
-				{#each messages as message (message.id)}
-					{@const open = expandedId === message.id}
-					{@const body = message.body || message.snippet}
-					<Accordion {open} ontoggle={() => toggleExpand(message.id)} bodyText={body}>
-						{#snippet header()}
-							<div class="message-row">
-								<Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
-								<div class="message-body-preview">
-									<div class="message-top">
-										<span class="sender">{senderLabel(message)}</span>
-										<span class="date">{when(message.sent_at)}</span>
-									</div>
-									<div class="subject">{message.subject || '(no subject)'}</div>
-									{#if !open}
-										<div class="snippet">{message.snippet}</div>
-									{/if}
-									<div class="message-tags">
-										<Badge variant="info">{message.account_email}</Badge>
-										{#each message.labels.slice(0, 3) as label (label)}
-											<Badge>{label}</Badge>
-										{/each}
+				<!-- One accordion: every mail is a divider-separated section; opening one
+				     closes the others (single `expandedId`). -->
+				<Accordion>
+					{#each messages as message (message.id)}
+						{@const open = expandedId === message.id}
+						{@const body = message.body || message.snippet}
+						<AccordionItem {open} ontoggle={() => toggleExpand(message.id)} bodyText={body}>
+							{#snippet header()}
+								<div class="message-row">
+									<Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
+									<div class="message-body-preview">
+										<div class="message-top">
+											<span class="sender">{senderLabel(message)}</span>
+											<span class="date">{when(message.sent_at)}</span>
+										</div>
+										<div class="subject">{message.subject || '(no subject)'}</div>
+										{#if !open}
+											<div class="snippet">{message.snippet}</div>
+										{/if}
+										<div class="message-tags">
+											<Badge variant="info">{message.account_email}</Badge>
+											{#each message.labels.slice(0, 3) as label (label)}
+												<Badge>{label}</Badge>
+											{/each}
+										</div>
 									</div>
 								</div>
-							</div>
-						{/snippet}
-						<pre class="message-text" data-ac-text>{body}</pre>
-					</Accordion>
-				{/each}
+							{/snippet}
+							<pre class="message-text" data-ac-text>{body}</pre>
+						</AccordionItem>
+					{/each}
+				</Accordion>
 			{/if}
 		</section>
 	{/if}
@@ -589,13 +593,9 @@
 	}
 
 	/* --- message list (inbox + search results) --- */
-	.message-list {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
-	}
-	/* Card chrome (border/radius/background/open state) and the header hover are
-	   provided by the Accordion component; here we only style the header content. */
+	/* The list is one Accordion: its single bordered container and the per-row
+	   dividers/open-state/header-hover come from the Accordion components. Here we
+	   only style the header content. */
 	.message-row {
 		display: flex;
 		align-items: flex-start;
