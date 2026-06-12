@@ -11,6 +11,7 @@
 
 import { browser } from '$app/environment';
 import { apiUrl, wsUrl } from '$lib/api';
+import { channel } from '$lib/crypto/channel';
 
 export type LinkState = 'connecting' | 'online' | 'offline';
 
@@ -122,9 +123,22 @@ class Connection {
 		// Never run two sockets at once — a leftover one would keep flipping state.
 		if (this.#socket && this.#socket.readyState <= WebSocket.OPEN) return;
 		this.ws = 'connecting';
+		// Establish the Layer-1 channel first so we can pass its session id and
+		// receive sealed frames. If it fails (no key on the Pi), connect plainly.
+		void channel
+			.ensure()
+			.catch(() => {})
+			.then(() => this.#connectSocket());
+	}
+
+	#connectSocket(): void {
+		if (!browser || !this.#started) return;
+		if (this.#socket && this.#socket.readyState <= WebSocket.OPEN) return;
+		const sid = channel.sessionId;
+		const path = sid ? `/api/ws?channel=${encodeURIComponent(sid)}` : '/api/ws';
 		let socket: WebSocket;
 		try {
-			socket = new WebSocket(wsUrl('/api/ws'));
+			socket = new WebSocket(wsUrl(path));
 		} catch {
 			this.ws = 'offline';
 			this.#scheduleWsRetry();
@@ -143,15 +157,7 @@ class Connection {
 		});
 		socket.addEventListener('message', (ev) => {
 			this.eventCount += 1;
-			let msg: { type?: string; topic?: string; payload?: unknown };
-			try {
-				msg = JSON.parse(ev.data);
-			} catch {
-				return;
-			}
-			if (msg.type === 'event' && typeof msg.topic === 'string') {
-				for (const fn of this.#eventHooks) fn(msg.topic, msg.payload);
-			}
+			void this.#handleFrame(ev.data);
 		});
 		socket.addEventListener('close', () => {
 			if (this.#socket === socket) {
@@ -164,6 +170,27 @@ class Connection {
 			// 'close' fires after 'error'; let it handle retry.
 			socket.close();
 		});
+	}
+
+	/** Parse an inbound WS frame, transparently opening sealed (Layer-1) frames. */
+	async #handleFrame(data: string): Promise<void> {
+		let msg: { type?: string; topic?: string; payload?: unknown };
+		try {
+			msg = JSON.parse(data);
+		} catch {
+			return;
+		}
+		if (msg.type === 'sealed' && typeof msg.payload === 'string') {
+			try {
+				const plain = await channel.open(msg.payload);
+				msg = JSON.parse(new TextDecoder().decode(plain));
+			} catch {
+				return; // can't open — drop
+			}
+		}
+		if (msg.type === 'event' && typeof msg.topic === 'string') {
+			for (const fn of this.#eventHooks) fn(msg.topic, msg.payload);
+		}
 	}
 
 	#scheduleWsRetry(): void {

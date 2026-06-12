@@ -121,13 +121,13 @@ async def _revoke_all(args: argparse.Namespace) -> None:
         db.close()
 
 
-def _ensure_channel_key() -> None:
+def _ensure_channel_key(path=None) -> None:
     """Generate the Pi's long-term static X25519 keypair if absent (PEM, 600)."""
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
     from cryptography.hazmat.primitives import serialization
 
-    settings = get_settings()
-    path = settings.channel_key_path
+    if path is None:
+        path = get_settings().channel_key_path
     if path.is_file():
         return
     key = X25519PrivateKey.generate()

@@ -46,12 +46,28 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
     await ws.accept()
     bus = ws.app.state.events
+
+    # Optional Layer-1 channel: if the client passes a valid channel session id,
+    # seal every outbound frame so the tunnel sees only ciphertext. Frame shape
+    # when sealed: {"type":"sealed","payload":"<b64 nonce||ct>"}; the client
+    # opens it to recover the original event message.
+    channel = getattr(ws.app.state, "channel", None)
+    sid = ws.query_params.get("channel")
+    sealed = bool(channel and sid and channel.has_session(sid))
+
+    import json as _json
+
+    def _frame(message: dict) -> dict:
+        if not sealed:
+            return message
+        return {"type": "sealed", "payload": channel.seal(sid, _json.dumps(message).encode())}
+
     queue = bus.subscribe()
-    await ws.send_json({"type": "ready"})
+    await ws.send_json(_frame({"type": "ready"}))
     try:
         while True:
             event = await queue.get()
-            await ws.send_json(event.as_message())
+            await ws.send_json(_frame(event.as_message()))
     except WebSocketDisconnect:
         pass
     except asyncio.CancelledError:

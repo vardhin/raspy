@@ -5,6 +5,12 @@
 
 import { browser } from '$app/environment';
 import { env } from '$env/dynamic/public';
+import { channel } from '$lib/crypto/channel';
+
+// Layer-1 channel toggle. On by default in the browser; the handshake endpoints
+// and any same-origin static assets bypass it. If the channel can't establish
+// (e.g. no key on the Pi) we fall back to cleartext so the app still works.
+const CHANNEL_ENABLED = browser;
 
 export function apiBase(): string {
 	return (env.PUBLIC_API_BASE ?? '').replace(/\/$/, '');
@@ -68,6 +74,14 @@ async function tryRefresh(): Promise<boolean> {
 	return refreshing;
 }
 
+/** Paths that must NOT go through the channel: the handshake itself, and the
+ *  vault blob/manifest endpoints — those payloads are ALREADY E2E-encrypted by
+ *  the vault layer (so double-wrapping is wasted) and need to stream, which the
+ *  body-buffering channel middleware would break. */
+function bypassChannel(url: string): boolean {
+	return url.includes('/api/channel/') || url.includes('/api/att/vault/');
+}
+
 async function rawFetch(url: string, init?: RequestInit): Promise<Response> {
 	const method = (init?.method ?? 'GET').toUpperCase();
 	const headers: Record<string, string> = {
@@ -79,7 +93,80 @@ async function rawFetch(url: string, init?: RequestInit): Promise<Response> {
 		const csrf = csrfCookie();
 		if (csrf) headers['x-csrf-token'] = csrf;
 	}
+
+	if (CHANNEL_ENABLED && !bypassChannel(url)) {
+		try {
+			return await channelFetch(url, method, headers, init);
+		} catch (e) {
+			// Channel unavailable (no key on the Pi, handshake failed) → cleartext.
+			if ((e as Error)?.message?.includes('MITM')) throw e; // never downgrade on MITM
+			// fall through to plain fetch
+		}
+	}
 	return fetch(url, { ...init, credentials: 'include', headers });
+}
+
+/** Seal the request body + headers, send with the channel session header, and
+ *  unseal the response into a normal Response the rest of api.ts can consume. */
+async function channelFetch(
+	url: string,
+	method: string,
+	headers: Record<string, string>,
+	init?: RequestInit
+): Promise<Response> {
+	await channel.ensure();
+	const sid = channel.sessionId;
+	if (!sid) throw new Error('no channel session');
+
+	// Seal the original body (if any) and preserve its content-type so the server
+	// restores it after decrypt.
+	const origCt = headers['content-type'] ?? headers['Content-Type'] ?? 'application/json';
+	let sealedBody: string | undefined;
+	if (init?.body != null) {
+		const bytes =
+			typeof init.body === 'string'
+				? new TextEncoder().encode(init.body)
+				: new Uint8Array(await new Response(init.body as BodyInit).arrayBuffer());
+		sealedBody = await channel.seal(bytes);
+	}
+
+	const chHeaders: Record<string, string> = {
+		...headers,
+		'x-channel-session': sid,
+		'x-channel-ct': origCt,
+		'content-type': 'text/plain'
+	};
+	delete chHeaders['Content-Type'];
+
+	let res = await fetch(url, {
+		...init,
+		method,
+		credentials: 'include',
+		headers: chHeaders,
+		body: sealedBody
+	});
+
+	// Channel session expired server-side → re-handshake once and retry.
+	if (res.status === 409) {
+		channel.reset();
+		await channel.ensure();
+		return channelFetch(url, method, headers, init);
+	}
+
+	if (res.headers.get('x-channel-enc') === '1') {
+		const plain = await channel.open(await res.text());
+		const realCt = res.headers.get('x-channel-ct') ?? 'application/json';
+		const out = new Headers(res.headers);
+		out.set('content-type', realCt);
+		out.delete('x-channel-enc');
+		out.delete('x-channel-ct');
+		return new Response(new Blob([plain as BlobPart]), {
+			status: res.status,
+			statusText: res.statusText,
+			headers: out
+		});
+	}
+	return res;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

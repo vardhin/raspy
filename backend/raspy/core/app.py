@@ -20,6 +20,10 @@ from .auth import AuthService
 from .auth import router as auth_router
 from .auth.deps import principal_from_request
 from .auth.service import load_or_create_secret
+from .channel import ChannelService
+from .channel import router as channel_router
+from .channel.middleware import ChannelMiddleware
+from .channel.service import load_static_pem
 from .db import Database
 from .events import EventBus
 from .notifications import NotificationService
@@ -62,6 +66,20 @@ async def lifespan(app: FastAPI):
             "protected API will 401 until then"
         )
 
+    # Layer-1 channel: load the static key (created by raspy-auth) and stand up
+    # the handshake/seal service. Optional — if absent or disabled, the channel
+    # middleware is a no-op and traffic flows in cleartext (LAN/dev).
+    app.state.channel = None
+    if settings.channel.enabled:
+        try:
+            pem = load_static_pem(settings.channel_key_path)
+            app.state.channel = ChannelService(settings.channel, pem)
+        except FileNotFoundError:
+            log.warning(
+                "channel key missing — run `raspy-auth gen-channel-key`; "
+                "Layer-1 encryption disabled until then"
+            )
+
     events = EventBus()
     app.state.events = events
 
@@ -95,22 +113,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Raspy Spine", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
 
-    # The served shell is same-origin (no CORS needed); the Vite dev server and a
-    # native client are cross-origin and need an explicit allow-list. Cookie auth
-    # requires credentialed CORS, which forbids "*" — hence a configured list.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Middleware order matters. Starlette wraps later-added middleware OUTERMOST,
+    # so we add inner→outer to get the runtime order:
+    #   CORS → ChannelMiddleware(decrypt req / encrypt resp) → auth gate → routers
+    # The channel layer must decrypt before the gate inspects auth cookies/headers,
+    # and CORS must be outermost so even error/decrypt responses get CORS headers.
 
-    # Global auth gate: enforce a valid access token for every /api path except
-    # the public allow-list. Runs for attachment routers too (they're mounted at
-    # startup), so no per-attachment wiring is needed. The WS path is allowed
-    # through here and authenticates itself inside ws_endpoint (middleware can't
-    # read the handshake the way a route dependency can).
+    # (innermost) Global auth gate: valid access token required for /api/* except
+    # the public allow-list. Covers attachment routers mounted later by the
+    # registry. The WS path passes through here and authenticates itself inside
+    # ws_endpoint (middleware can't read the WS handshake like a route dep can).
     @app.middleware("http")
     async def auth_gate(request, call_next):
         path = request.url.path
@@ -122,7 +134,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"detail": "authentication required"}, status_code=401)
         return await call_next(request)
 
+    # Channel decrypt/encrypt (no-op unless the request carries a channel session
+    # header AND the service is up). Reads the service lazily from app.state since
+    # it's constructed in the lifespan, after create_app().
+    app.add_middleware(ChannelMiddleware, service_getter=lambda: getattr(app.state, "channel", None))
+
+    # (outermost) CORS. Credentialed (cookie) CORS forbids "*", so an explicit
+    # allow-list is required in production.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # Core routers — always present, independent of any attachment.
+    app.include_router(channel_router.router, prefix="/api")
     app.include_router(auth_router.router, prefix="/api")
     app.include_router(system.router, prefix="/api")
     app.include_router(manifest.router, prefix="/api")

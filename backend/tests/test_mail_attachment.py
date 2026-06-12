@@ -30,9 +30,16 @@ def _client(tmp_path: Path, monkeypatch, messages: list[mailmod.GmailMessage]):
     app = create_app(auth_settings(tmp_path))
 
     class _AuthClient(TestClient):
-        # Log in automatically once the lifespan (which runs auth.init) is up,
-        # so the existing `with client:` blocks gain an authenticated session.
+        # Log in automatically once the lifespan (which runs auth.init) is up, so
+        # the existing `with client:` blocks gain an authenticated session.
+        # Idempotent: these tests build the client then re-enter via `with`, so
+        # guard against running the lifespan / login twice.
+        _entered = False
+
         def __enter__(self):
+            if self._entered:
+                return self
+            self._entered = True
             super().__enter__()
             login(self)
             return self

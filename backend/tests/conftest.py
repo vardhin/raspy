@@ -35,6 +35,10 @@ def _seed_account(settings: Settings) -> None:
         db.close()
 
     asyncio.run(_run())
+    # Channel static key, so the Layer-1 service is available in tests too.
+    from raspy.core.auth.cli import _ensure_channel_key
+
+    _ensure_channel_key(settings.channel_key_path)
 
 
 def auth_settings(tmp_path: Path) -> Settings:

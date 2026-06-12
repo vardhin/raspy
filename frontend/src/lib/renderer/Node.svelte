@@ -9,6 +9,7 @@
 	import FileManager from './FileManager.svelte';
 	import MailClient from './MailClient.svelte';
 	import SystemStats from './SystemStats.svelte';
+	import Vault from './Vault.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -152,6 +153,8 @@
 	<MailClient />
 {:else if node.type === 'system_stats'}
 	<SystemStats {node} />
+{:else if node.type === 'vault'}
+	<Vault />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

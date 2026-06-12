@@ -175,6 +175,18 @@ def mail_client(*, title: str | None = None) -> UINode:
     return _node("mail_client", title=title)
 
 
+def vault(*, title: str | None = None) -> UINode:
+    """The zero-knowledge vault UI (Layer 2). The backend is a *dumb* store: it
+    holds opaque encrypted blobs (content-addressed by SHA-256) and one opaque
+    encrypted manifest. ALL encryption/decryption happens in the shell with the
+    vault master key (derived from the password, never sent to the Pi). The shell
+    component fetches + decrypts the manifest to render the file list, then
+    streams + decrypts individual blobs on demand for preview. Flutter-portable:
+    the contract is just opaque-blob storage + an encrypted manifest.
+    """
+    return _node("vault", title=title)
+
+
 # --- action helpers ---------------------------------------------------------
 
 
