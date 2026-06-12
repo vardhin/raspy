@@ -108,38 +108,37 @@
 		{#if connection.version}
 			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
 		{/if}
-		<div class="push-panel {notifications.pushStatus}">
-			<div class="push-state">
+		<details class="disclosure push {notifications.pushStatus}">
+			<summary>
 				<span class="push-dot" aria-hidden="true"></span>
-				<div class="push-copy">
-					<div class="push-title">
-						Push <Badge variant={pushVariant[notifications.pushStatus]}>
-							{pushLabel[notifications.pushStatus]}
-						</Badge>
-					</div>
-					<div class="push-detail">{pushDetail[notifications.pushStatus]}</div>
-				</div>
+				<span class="disclosure-label">Push</span>
+				<Badge variant={pushVariant[notifications.pushStatus]}>
+					{pushLabel[notifications.pushStatus]}
+				</Badge>
+			</summary>
+			<div class="disclosure-body push-body">
+				<div class="push-detail">{pushDetail[notifications.pushStatus]}</div>
+				{#if notifications.pushError}
+					<div class="push-error">{notifications.pushError}</div>
+				{/if}
+				{#if notifications.pushStatus === 'enabled' || notifications.pushStatus === 'off'}
+					<button class="push-toggle" disabled={notifications.pushBusy} onclick={togglePush}>
+						<Icon name={notifications.pushStatus === 'enabled' ? 'bell-off' : 'bell'} size={15} />
+						<span>
+							{notifications.pushBusy
+								? 'Working…'
+								: notifications.pushStatus === 'enabled'
+									? 'Disable push'
+									: 'Enable push'}
+						</span>
+					</button>
+				{/if}
 			</div>
-			{#if notifications.pushError}
-				<div class="push-error">{notifications.pushError}</div>
-			{/if}
-			{#if notifications.pushStatus === 'enabled' || notifications.pushStatus === 'off'}
-				<button class="push-toggle" disabled={notifications.pushBusy} onclick={togglePush}>
-					<Icon name={notifications.pushStatus === 'enabled' ? 'bell-off' : 'bell'} size={15} />
-					<span>
-						{notifications.pushBusy
-							? 'Working…'
-							: notifications.pushStatus === 'enabled'
-								? 'Disable push'
-								: 'Enable push'}
-					</span>
-				</button>
-			{/if}
-		</div>
+		</details>
 
-		<details class="theme">
-			<summary>Theme</summary>
-			<div class="theme-body"><ThemePicker /></div>
+		<details class="disclosure theme">
+			<summary><span class="disclosure-label">Theme</span></summary>
+			<div class="disclosure-body"><ThemePicker /></div>
 		</details>
 	</div>
 </aside>
@@ -281,6 +280,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
+		margin-top: var(--space-3);
 		padding-top: var(--space-3);
 		border-top: var(--border-width) solid var(--border-color);
 	}
@@ -293,51 +293,57 @@
 		color: var(--muted);
 		font-size: 0.75rem;
 	}
-	.push-panel {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
-		padding: var(--space-2);
+	/* Collapsible footer sections (Push, Theme). Compact summary rows so the
+	   drawer footer stays short; details expand on tap/click. */
+	.disclosure {
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-md);
 		background: color-mix(in srgb, var(--surface) 58%, transparent);
 	}
-	.push-state {
+	.disclosure > summary {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: var(--space-2);
-		min-width: 0;
+		padding: var(--space-2);
+		cursor: pointer;
+		list-style: none;
+		font-size: 0.8rem;
+		font-weight: var(--font-weight-bold);
+		color: var(--muted);
+	}
+	.disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+	.disclosure-label {
+		color: var(--fg);
+		margin-right: auto;
+	}
+	.disclosure[open] > summary {
+		border-bottom: var(--border-width) solid var(--border-color);
+	}
+	.disclosure-body {
+		padding: var(--space-2);
+	}
+	.push-body {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
 	}
 	.push-dot {
 		width: 0.6rem;
 		height: 0.6rem;
-		margin-top: 0.42rem;
 		border-radius: var(--radius-full);
 		background: var(--muted);
 		flex: none;
 	}
-	.push-panel.enabled .push-dot {
+	.push.enabled .push-dot {
 		background: var(--success);
 	}
-	.push-panel.off .push-dot {
+	.push.off .push-dot {
 		background: var(--warn);
 	}
-	.push-panel.denied .push-dot {
+	.push.denied .push-dot {
 		background: var(--danger);
-	}
-	.push-copy {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		min-width: 0;
-	}
-	.push-title {
-		display: flex;
-		align-items: center;
-		gap: var(--space-1);
-		color: var(--fg);
-		font-size: 0.78rem;
-		font-weight: var(--font-weight-bold);
 	}
 	.push-detail,
 	.push-error {
@@ -373,16 +379,6 @@
 	.push-toggle:disabled {
 		cursor: wait;
 		opacity: 0.65;
-	}
-	.theme summary {
-		cursor: pointer;
-		font-size: 0.8rem;
-		font-weight: var(--font-weight-bold);
-		color: var(--muted);
-		padding: var(--space-1) 0;
-	}
-	.theme-body {
-		padding-top: var(--space-2);
 	}
 
 	@media (max-width: 720px) {

@@ -2,7 +2,7 @@
 	import { getContext, onMount } from 'svelte';
 	import { attAction, attGet, attGetQuery } from '$lib/api';
 	import { connection } from '$lib/connection.svelte';
-	import { Badge, Button, Field, Icon, Text } from '$lib/components';
+	import { Accordion, Badge, Button, Field, Icon, Text } from '$lib/components';
 	import type { RenderContext } from './context.svelte';
 
 	interface MailAccount {
@@ -389,32 +389,31 @@
 			{:else}
 				{#each messages as message (message.id)}
 					{@const open = expandedId === message.id}
-					<article class="message" class:open>
-						<button class="message-row" aria-expanded={open} onclick={() => toggleExpand(message.id)}>
-							<Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
-							<div class="message-body-preview">
-								<div class="message-top">
-									<span class="sender">{senderLabel(message)}</span>
-									<span class="date">{when(message.sent_at)}</span>
-								</div>
-								<div class="subject">{message.subject || '(no subject)'}</div>
-								{#if !open}
-									<div class="snippet">{message.snippet}</div>
-								{/if}
-								<div class="message-tags">
-									<Badge variant="info">{message.account_email}</Badge>
-									{#each message.labels.slice(0, 3) as label (label)}
-										<Badge>{label}</Badge>
-									{/each}
+					{@const body = message.body || message.snippet}
+					<Accordion {open} ontoggle={() => toggleExpand(message.id)} bodyText={body}>
+						{#snippet header()}
+							<div class="message-row">
+								<Icon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
+								<div class="message-body-preview">
+									<div class="message-top">
+										<span class="sender">{senderLabel(message)}</span>
+										<span class="date">{when(message.sent_at)}</span>
+									</div>
+									<div class="subject">{message.subject || '(no subject)'}</div>
+									{#if !open}
+										<div class="snippet">{message.snippet}</div>
+									{/if}
+									<div class="message-tags">
+										<Badge variant="info">{message.account_email}</Badge>
+										{#each message.labels.slice(0, 3) as label (label)}
+											<Badge>{label}</Badge>
+										{/each}
+									</div>
 								</div>
 							</div>
-						</button>
-						{#if open}
-							<div class="message-full">
-								<pre class="message-text">{message.body || message.snippet}</pre>
-							</div>
-						{/if}
-					</article>
+						{/snippet}
+						<pre class="message-text" data-ac-text>{body}</pre>
+					</Accordion>
 				{/each}
 			{/if}
 		</section>
@@ -595,31 +594,14 @@
 		flex-direction: column;
 		gap: var(--space-2);
 	}
-	.message {
-		border: var(--border-width) solid var(--border-color);
-		border-radius: var(--radius-lg);
-		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 100%), transparent);
-		overflow: hidden;
-		transition: border-color var(--motion-fast) var(--motion-ease);
-	}
-	.message.open {
-		border-color: color-mix(in srgb, var(--accent) 50%, var(--border-color));
-		box-shadow: var(--shadow-md);
-	}
+	/* Card chrome (border/radius/background/open state) and the header hover are
+	   provided by the Accordion component; here we only style the header content. */
 	.message-row {
 		display: flex;
 		align-items: flex-start;
 		gap: var(--space-3);
 		width: 100%;
-		text-align: left;
-		color: var(--fg);
-		background: transparent;
-		border: none;
 		padding: var(--space-3) var(--space-4);
-		cursor: pointer;
-	}
-	.message-row:hover {
-		background: color-mix(in srgb, var(--accent) 8%, transparent);
 	}
 	.message-row :global(svg) {
 		margin-top: 0.15rem;
@@ -672,12 +654,14 @@
 		gap: var(--space-1);
 		margin-top: var(--space-1);
 	}
-	.message-full {
-		padding: 0 var(--space-4) var(--space-4) calc(var(--space-4) + var(--space-3) + 16px);
-		border-top: var(--border-width) solid var(--border-color);
-	}
+	/* The expanded body. This <pre> is the Accordion's measured text element
+	   (data-ac-text): its padding/border/line-height are read once and fed to
+	   pretext, so the open-height animation matches its real wrapped height. */
 	.message-text {
-		margin: var(--space-3) 0 0;
+		margin: 0;
+		padding: var(--space-3) var(--space-4) var(--space-4)
+			calc(var(--space-4) + var(--space-3) + 16px);
+		border-top: var(--border-width) solid var(--border-color);
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 		font: inherit;
@@ -714,7 +698,8 @@
 			align-items: flex-start;
 			gap: 2px;
 		}
-		.message-full {
+		/* Tighten the body's deep left indent on small screens. */
+		.message-text {
 			padding-left: var(--space-4);
 		}
 	}

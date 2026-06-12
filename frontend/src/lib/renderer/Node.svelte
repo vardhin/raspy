@@ -27,6 +27,10 @@
 	const gap = $derived((node.gap ?? 3) as 1 | 2 | 3 | 4 | 5 | 6);
 	const align = $derived(node.align as 'start' | 'center' | 'end' | 'stretch' | undefined);
 	const justify = $derived(node.justify as 'start' | 'center' | 'end' | 'between' | undefined);
+	// Row stacks wrap by default so a too-wide row (e.g. input + button) reflows
+	// on narrow screens instead of pushing a child off-screen. Columns never need
+	// it. The backend can still force `wrap: false` explicitly.
+	const stackWrap = $derived(node.wrap ?? node.direction === 'row');
 
 	async function onButton() {
 		if (node.action) await ctx.runAction(node.action, row);
@@ -45,7 +49,7 @@
 		{gap}
 		align={align ?? 'stretch'}
 		justify={justify ?? 'start'}
-		wrap={node.wrap ?? false}
+		wrap={stackWrap}
 	>
 		{#each node.children ?? [] as child, i (i)}
 			<Self node={child} {row} />

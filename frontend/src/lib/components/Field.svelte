@@ -43,6 +43,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
+		min-width: 0;
 	}
 	.field.inline {
 		flex-direction: row-reverse;
@@ -58,6 +59,8 @@
 	}
 	.control {
 		font: inherit;
+		width: 100%;
+		min-width: 0;
 		color: var(--fg);
 		background: color-mix(
 			in srgb,
