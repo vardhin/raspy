@@ -25,11 +25,47 @@ export interface VaultEntry {
 	created: number;
 	key: string; // b64 per-blob data key
 	header: string; // b64 secretstream header
+	parentId: string | null; // folder this file lives in; null = root
+}
+
+export interface VaultFolder {
+	id: string; // random id, plaintext only inside the encrypted manifest
+	name: string;
+	parentId: string | null; // null = root
+	created: number;
 }
 
 export interface Manifest {
-	version: 1;
+	version: 2;
+	folders: VaultFolder[];
 	entries: VaultEntry[];
+}
+
+// Upgrade any older/looser manifest shape to the current v2 in memory. A v1
+// manifest has no `folders` and entries without `parentId`; we default both so
+// existing vaults open unchanged and get persisted as v2 on the next save.
+export function normalizeManifest(raw: unknown): Manifest {
+	const m = (raw ?? {}) as Partial<Manifest> & { entries?: VaultEntry[] };
+	const entries = (m.entries ?? []).map((e) => ({ ...e, parentId: e.parentId ?? null }));
+	const folders = (m.folders ?? []).map((f) => ({ ...f, parentId: f.parentId ?? null }));
+	return { version: 2, folders, entries };
+}
+
+// All descendant folder ids of `rootId`, inclusive — used to delete a folder
+// subtree (the folder, its subfolders, and their files) in one pass.
+export function descendantIds(folders: VaultFolder[], rootId: string): Set<string> {
+	const ids = new Set<string>([rootId]);
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const f of folders) {
+			if (f.parentId && ids.has(f.parentId) && !ids.has(f.id)) {
+				ids.add(f.id);
+				grew = true;
+			}
+		}
+	}
+	return ids;
 }
 
 function masterKey(): Uint8Array {
@@ -49,7 +85,7 @@ async function sha256Hex(s: Sodium, data: Uint8Array): Promise<string> {
 
 export async function loadManifest(): Promise<Manifest> {
 	const res = await fetch(attUrl('vault', 'manifest'), { credentials: 'include' });
-	if (res.status === 204) return { version: 1, entries: [] };
+	if (res.status === 204) return normalizeManifest(null);
 	if (!res.ok) throw new Error(`manifest load failed: ${res.status}`);
 	const blob = new Uint8Array(await res.arrayBuffer());
 	const s = await sodiumReady();
@@ -57,7 +93,7 @@ export async function loadManifest(): Promise<Manifest> {
 	const nonce = blob.slice(0, s.crypto_secretbox_NONCEBYTES);
 	const ct = blob.slice(s.crypto_secretbox_NONCEBYTES);
 	const plain = s.crypto_secretbox_open_easy(ct, nonce, masterKey());
-	return JSON.parse(new TextDecoder().decode(plain)) as Manifest;
+	return normalizeManifest(JSON.parse(new TextDecoder().decode(plain)));
 }
 
 export async function saveManifest(manifest: Manifest): Promise<void> {
@@ -79,6 +115,7 @@ export async function saveManifest(manifest: Manifest): Promise<void> {
 
 export async function encryptFile(
 	file: File,
+	parentId: string | null = null,
 	onProgress?: (fraction: number) => void
 ): Promise<{ ciphertext: Uint8Array; entry: Omit<VaultEntry, 'hash'> }> {
 	const s = await sodiumReady();
@@ -126,17 +163,19 @@ export async function encryptFile(
 			size: file.size,
 			created: Date.now() / 1000,
 			key: b64encode(s, dataKey),
-			header: b64encode(s, header)
+			header: b64encode(s, header),
+			parentId
 		}
 	};
 }
 
 export async function uploadFile(
 	file: File,
+	parentId: string | null = null,
 	onProgress?: (fraction: number) => void
 ): Promise<VaultEntry> {
 	const s = await sodiumReady();
-	const { ciphertext, entry } = await encryptFile(file, onProgress);
+	const { ciphertext, entry } = await encryptFile(file, parentId, onProgress);
 	const hash = await sha256Hex(s, ciphertext);
 	// Content-addressed PUT. Bypasses Layer-1 channel (already E2E-encrypted).
 	const res = await fetch(attUrl('vault', `blob/${hash}`), {
@@ -155,12 +194,9 @@ export async function downloadAndDecrypt(
 	entry: VaultEntry,
 	onProgress?: (fraction: number) => void
 ): Promise<Blob> {
-	const tStart = performance.now();
 	const s = await sodiumReady();
-	const tSodium = performance.now();
 	const res = await fetch(attUrl('vault', `blob/${entry.hash}`), { credentials: 'include' });
 	if (!res.ok) throw new Error(`blob download failed: ${res.status}`);
-	const tFetchResolved = performance.now();
 
 	const totalBytes = Number(res.headers.get('content-length') || 0);
 	const reader = res.body!.getReader();
@@ -174,7 +210,6 @@ export async function downloadAndDecrypt(
 		if (totalBytes) onProgress?.(got / totalBytes);
 	}
 	const ciphertext = concat(received);
-	const tDownloaded = performance.now();
 
 	// Re-split the length-framed secretstream chunks and decrypt.
 	const state = s.crypto_secretstream_xchacha20poly1305_init_pull(
@@ -193,17 +228,7 @@ export async function downloadAndDecrypt(
 		if (!r) throw new Error('vault decrypt failed (wrong key or corrupt blob)');
 		out.push(r.message);
 	}
-	const blob = new Blob([concat(out) as BlobPart], { type: entry.type });
-	const tDone = performance.now();
-	// TEMP timing — remove after diagnosing vault decrypt slowness.
-	console.log(
-		`[vault] ${entry.name} (${entry.size}B): ` +
-			`sodium ${(tSodium - tStart).toFixed(1)}ms | ` +
-			`fetch-headers ${(tFetchResolved - tSodium).toFixed(1)}ms | ` +
-			`download ${(tDownloaded - tFetchResolved).toFixed(1)}ms | ` +
-			`decrypt ${(tDone - tDownloaded).toFixed(1)}ms`
-	);
-	return blob;
+	return new Blob([concat(out) as BlobPart], { type: entry.type });
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
