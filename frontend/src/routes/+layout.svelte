@@ -123,7 +123,9 @@
 	</div>
 
 	<main class="content">
-		{@render children()}
+		<div class="content-inner">
+			{@render children()}
+		</div>
 	</main>
 </div>
 {/if}
@@ -135,14 +137,23 @@
 	.shell {
 		display: flex;
 		align-items: flex-start;
-		min-height: 100dvh;
+		/* Pin the shell to the viewport so the sidebar column never scrolls with
+		   the page; only .content scrolls (see overflow-y below). */
+		height: 100dvh;
+		overflow: hidden;
 	}
 	.content {
 		flex: 1;
 		min-width: 0;
+		height: 100%;
+		overflow-y: auto;
+		padding: var(--space-6) var(--space-5);
+	}
+	/* Inner wrapper keeps the content centred at its max width while .content
+	   itself owns the full-height scroll region. */
+	.content-inner {
 		max-width: 920px;
 		margin: 0 auto;
-		padding: var(--space-6) var(--space-5);
 	}
 
 	/* Desktop: drawer is just the static sidebar column; the mobile chrome
@@ -158,6 +169,15 @@
 	@media (max-width: 720px) {
 		.shell {
 			flex-direction: column;
+			/* On mobile the sidebar is an off-canvas drawer, so the shell scrolls
+			   as a normal page (sticky topbar + scrolling content). */
+			height: auto;
+			min-height: 100dvh;
+			overflow: visible;
+		}
+		.content {
+			height: auto;
+			overflow-y: visible;
 		}
 
 		/* Sticky mobile header carrying the hamburger. */

@@ -7,7 +7,7 @@
 	import Badge from './Badge.svelte';
 	import ThemePicker from './ThemePicker.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
-	import { connection, type LinkState } from '$lib/connection.svelte';
+	import { connection } from '$lib/connection.svelte';
 	import { notifications, type PushStatus } from '$lib/notifications/store.svelte';
 
 	// `onClose`, when provided, renders the in-drawer close button (mobile only) and
@@ -19,16 +19,6 @@
 		else await notifications.enablePush();
 	}
 
-	const stateVariant: Record<LinkState, 'success' | 'warn' | 'danger'> = {
-		online: 'success',
-		connecting: 'warn',
-		offline: 'danger'
-	};
-	const stateLabel: Record<LinkState, string> = {
-		online: 'Connected',
-		connecting: 'Connecting…',
-		offline: 'Offline'
-	};
 	const pushVariant: Record<PushStatus, 'success' | 'warn' | 'danger' | 'neutral'> = {
 		enabled: 'success',
 		off: 'warn',
@@ -48,13 +38,24 @@
 		unsupported: 'This browser or connection cannot use Web Push.'
 	};
 
-	const overall = $derived<LinkState>(
+	// The brand dot encodes both channels at once so the footer can drop the two
+	// status pills: red = nothing up, amber = one of the two, green = both.
+	type LinkHealth = 'none' | 'api' | 'ws' | 'all';
+	const linkHealth = $derived<LinkHealth>(
 		connection.http === 'online' && connection.ws === 'online'
-			? 'online'
-			: connection.http === 'offline' && connection.ws === 'offline'
-				? 'offline'
-				: 'connecting'
+			? 'all'
+			: connection.http === 'online'
+				? 'api'
+				: connection.ws === 'online'
+					? 'ws'
+					: 'none'
 	);
+	const linkTitle: Record<LinkHealth, string> = {
+		all: 'API & WebSocket connected',
+		api: 'API connected · WebSocket offline',
+		ws: 'WebSocket connected · API offline',
+		none: 'Disconnected'
+	};
 
 	function active(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/';
@@ -64,7 +65,7 @@
 
 <aside class="sidebar">
 	<div class="brand">
-		<span class="dot {overall}" title={stateLabel[overall]}></span>
+		<span class="dot {linkHealth}" title={linkTitle[linkHealth]}></span>
 		<span class="brand-name">Raspy</span>
 		{#if onClose}
 			<button class="drawer-close" aria-label="Close menu" onclick={onClose}>
@@ -81,30 +82,30 @@
 
 		<div class="section-label">Apps</div>
 
-		{#if manifest.loading && manifest.attachments.length === 0}
-			{#each [0, 1, 2] as i (i)}
-				<div class="item skeleton"></div>
-			{/each}
-		{:else if manifest.attachments.length === 0}
-			<div class="empty">No apps {manifest.error ? '(offline)' : 'installed'}.</div>
-		{:else}
-			{#each manifest.attachments as app (app.id)}
-				<a class="item" class:active={active(`/a/${app.id}`)} href="/a/{app.id}" onclick={onClose}>
-					<Icon name={app.icon} />
-					<span>{app.title}</span>
-					{#if app.id === 'notifications' && notifications.unread > 0}
-						<span class="count">{notifications.unread > 99 ? '99+' : notifications.unread}</span>
-					{/if}
-				</a>
-			{/each}
-		{/if}
+		<!-- Only the app list scrolls; the Dashboard link and "Apps" label above it
+		     stay pinned, and a long list never pushes the footer off-screen. -->
+		<div class="apps">
+			{#if manifest.loading && manifest.attachments.length === 0}
+				{#each [0, 1, 2] as i (i)}
+					<div class="item skeleton"></div>
+				{/each}
+			{:else if manifest.attachments.length === 0}
+				<div class="empty">No apps {manifest.error ? '(offline)' : 'installed'}.</div>
+			{:else}
+				{#each manifest.attachments as app (app.id)}
+					<a class="item" class:active={active(`/a/${app.id}`)} href="/a/{app.id}" onclick={onClose}>
+						<Icon name={app.icon} />
+						<span>{app.title}</span>
+						{#if app.id === 'notifications' && notifications.unread > 0}
+							<span class="count">{notifications.unread > 99 ? '99+' : notifications.unread}</span>
+						{/if}
+					</a>
+				{/each}
+			{/if}
+		</div>
 	</nav>
 
 	<div class="footer">
-		<div class="signals">
-			<Badge variant={stateVariant[connection.http]}>API · {stateLabel[connection.http]}</Badge>
-			<Badge variant={stateVariant[connection.ws]}>WS · {stateLabel[connection.ws]}</Badge>
-		</div>
 		{#if connection.version}
 			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
 		{/if}
@@ -162,13 +163,14 @@
 		backdrop-filter: blur(var(--blur));
 		-webkit-backdrop-filter: blur(var(--blur));
 		border-right: var(--border-width) solid var(--border-color);
-		overflow-y: auto;
+		overflow: hidden;
 	}
 	.brand {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		padding: 0 var(--space-2);
+		flex: none;
 	}
 	.brand-name {
 		font-weight: var(--font-weight-bold);
@@ -212,14 +214,16 @@
 		background: var(--muted);
 		flex: none;
 	}
-	.dot.online {
+	/* Brand-dot color coding: both channels up (green), exactly one up (amber),
+	   neither (red). */
+	.dot.all {
 		background: var(--success);
 	}
-	.dot.connecting {
+	.dot.api,
+	.dot.ws {
 		background: var(--warn);
-		animation: pulse 1.2s ease-in-out infinite;
 	}
-	.dot.offline {
+	.dot.none {
 		background: var(--danger);
 	}
 	@keyframes pulse {
@@ -237,6 +241,19 @@
 		gap: 2px;
 		flex: 1;
 		min-height: 0;
+	}
+	/* The scrollable app list. The Dashboard link and "Apps" label above stay
+	   pinned; only this region scrolls when the list outgrows the column. */
+	.apps {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		/* Room for the scrollbar so rows don't sit under it. */
+		margin-right: calc(-1 * var(--space-1));
+		padding-right: var(--space-1);
 	}
 	.section-label {
 		font-size: 0.7rem;
@@ -283,6 +300,7 @@
 		margin-top: var(--space-3);
 		padding-top: var(--space-3);
 		border-top: var(--border-width) solid var(--border-color);
+		flex: none;
 	}
 	.signals {
 		display: flex;
