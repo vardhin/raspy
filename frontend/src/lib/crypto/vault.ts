@@ -155,9 +155,12 @@ export async function downloadAndDecrypt(
 	entry: VaultEntry,
 	onProgress?: (fraction: number) => void
 ): Promise<Blob> {
+	const tStart = performance.now();
 	const s = await sodiumReady();
+	const tSodium = performance.now();
 	const res = await fetch(attUrl('vault', `blob/${entry.hash}`), { credentials: 'include' });
 	if (!res.ok) throw new Error(`blob download failed: ${res.status}`);
+	const tFetchResolved = performance.now();
 
 	const totalBytes = Number(res.headers.get('content-length') || 0);
 	const reader = res.body!.getReader();
@@ -171,6 +174,7 @@ export async function downloadAndDecrypt(
 		if (totalBytes) onProgress?.(got / totalBytes);
 	}
 	const ciphertext = concat(received);
+	const tDownloaded = performance.now();
 
 	// Re-split the length-framed secretstream chunks and decrypt.
 	const state = s.crypto_secretstream_xchacha20poly1305_init_pull(
@@ -189,7 +193,17 @@ export async function downloadAndDecrypt(
 		if (!r) throw new Error('vault decrypt failed (wrong key or corrupt blob)');
 		out.push(r.message);
 	}
-	return new Blob([concat(out) as BlobPart], { type: entry.type });
+	const blob = new Blob([concat(out) as BlobPart], { type: entry.type });
+	const tDone = performance.now();
+	// TEMP timing — remove after diagnosing vault decrypt slowness.
+	console.log(
+		`[vault] ${entry.name} (${entry.size}B): ` +
+			`sodium ${(tSodium - tStart).toFixed(1)}ms | ` +
+			`fetch-headers ${(tFetchResolved - tSodium).toFixed(1)}ms | ` +
+			`download ${(tDownloaded - tFetchResolved).toFixed(1)}ms | ` +
+			`decrypt ${(tDone - tDownloaded).toFixed(1)}ms`
+	);
+	return blob;
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
