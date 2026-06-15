@@ -5,14 +5,18 @@
 	import { page } from '$app/state';
 	import Icon from './Icon.svelte';
 	import Badge from './Badge.svelte';
+	import Button from './Button.svelte';
+	import Modal from './Modal.svelte';
 	import ThemePicker from './ThemePicker.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { notifications, type PushStatus } from '$lib/notifications/store.svelte';
+	import { auth } from '$lib/auth.svelte';
 
 	// `onClose`, when provided, renders the in-drawer close button (mobile only) and
 	// is also fired when a nav link is tapped so the drawer dismisses on navigation.
 	let { onClose }: { onClose?: () => void } = $props();
+	let accountOpen = $state(false);
 
 	async function togglePush() {
 		if (notifications.pushEnabled) await notifications.disablePush();
@@ -61,6 +65,12 @@
 		if (href === '/') return page.url.pathname === '/';
 		return page.url.pathname === href;
 	}
+
+	async function leaveAccount() {
+		accountOpen = false;
+		onClose?.();
+		await auth.logout();
+	}
 </script>
 
 <aside class="sidebar">
@@ -106,6 +116,11 @@
 	</nav>
 
 	<div class="footer">
+		<button class="account" onclick={() => (accountOpen = true)} aria-label="Account">
+			<Icon name="user" />
+			<span class="account-name">{auth.username ?? 'Account'}</span>
+			<span class="account-role">{auth.role === 'admin' ? 'Admin' : 'Child'}</span>
+		</button>
 		{#if connection.version}
 			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
 		{/if}
@@ -143,6 +158,23 @@
 		</details>
 	</div>
 </aside>
+
+<Modal open={accountOpen} title="Account" size="sm" onclose={() => (accountOpen = false)}>
+	<div class="account-panel">
+		<div class="identity">
+			<div class="identity-name">{auth.username}</div>
+			<div class="identity-role">{auth.role === 'admin' ? 'Master admin' : 'Child account'}</div>
+		</div>
+		<Button variant="neutral" onclick={leaveAccount}>
+			<Icon name="log-out" size={16} />
+			<span>Sign out</span>
+		</Button>
+		<Button variant="ghost" onclick={leaveAccount}>
+			<Icon name="users" size={16} />
+			<span>Switch account</span>
+		</Button>
+	</div>
+</Modal>
 
 <style>
 	.sidebar {
@@ -301,6 +333,54 @@
 		padding-top: var(--space-3);
 		border-top: var(--border-width) solid var(--border-color);
 		flex: none;
+	}
+	.account {
+		display: grid;
+		grid-template-columns: auto 1fr auto;
+		align-items: center;
+		gap: var(--space-2);
+		width: 100%;
+		min-width: 0;
+		padding: var(--space-2);
+		color: var(--fg);
+		background: color-mix(in srgb, var(--surface) 58%, transparent);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		text-align: left;
+	}
+	.account:hover {
+		background: var(--surface);
+	}
+	.account-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-weight: var(--font-weight-bold);
+	}
+	.account-role {
+		color: var(--muted);
+		font-size: 0.72rem;
+	}
+	.account-panel {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.identity {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding-bottom: var(--space-2);
+		border-bottom: var(--border-width) solid var(--border-color);
+	}
+	.identity-name {
+		font-weight: var(--font-weight-bold);
+	}
+	.identity-role {
+		color: var(--muted);
+		font-size: 0.85rem;
 	}
 	.signals {
 		display: flex;

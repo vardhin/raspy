@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, Iterator
 
 from fastapi import APIRouter
 
@@ -38,6 +39,49 @@ class AttachmentContext:
     config: dict[str, Any]
     notifications: "NotificationService | None" = None
     attachment_id: str = "core"
+    # Returns ``[{"username", "role", ...}]`` for every account — wired to the
+    # auth service by the registry. Lets background workers (e.g. the mail poller)
+    # iterate each account's isolated storage. None in tests / when auth is down.
+    accounts_provider: "Callable[[], Awaitable[list[dict[str, Any]]]] | None" = None
+
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        """All accounts (no secrets). Empty if no provider is wired."""
+        if self.accounts_provider is None:
+            return []
+        return await self.accounts_provider()
+
+    @contextlib.contextmanager
+    def account_scope(self, username: str, *, is_admin: bool) -> "Iterator[None]":
+        """Run a block as if ``username`` made the request, so ScopedDB / data
+        dirs resolve to that account. For background workers that have no HTTP
+        request context. The admin keeps the legacy (unsuffixed) scope."""
+        from .auth.scope import current_account, current_account_legacy
+
+        tok_a = current_account.set(username)
+        tok_l = current_account_legacy.set(is_admin)
+        try:
+            yield
+        finally:
+            current_account.reset(tok_a)
+            current_account_legacy.reset(tok_l)
+
+    @property
+    def account_data_dir(self) -> Path:
+        """The data dir for the account making the current request.
+
+        The original admin keeps the legacy ``data_dir`` (so its existing files
+        stay where they are); a child account gets an isolated
+        ``data_dir/accounts/<slug>/`` subtree. Read the account from the
+        ``current_account`` ContextVar at call time, so attachments must use this
+        *inside* a request handler (not capture ``data_dir`` once at load).
+        """
+        # Imported lazily to avoid a core<->auth import cycle at module load.
+        from .auth.scope import account_slug, current_account, current_account_legacy
+
+        username = current_account.get()
+        if username is None or current_account_legacy.get():
+            return self.data_dir
+        return self.data_dir / "accounts" / account_slug(username)
 
     def publish(self, topic: str, payload: Any = None) -> None:
         self.events.publish(topic, payload)
@@ -107,6 +151,12 @@ class BaseAttachment:
     @property
     def events(self) -> EventBus:
         return self.ctx.events
+
+    @property
+    def account_data_dir(self) -> Path:
+        """Per-account data dir for the current request. See
+        :attr:`AttachmentContext.account_data_dir`. Call inside a handler."""
+        return self.ctx.account_data_dir
 
     async def notify(self, title: str, body: str = "", **kwargs: Any) -> Any:
         """Convenience: send a notification tagged with this attachment.

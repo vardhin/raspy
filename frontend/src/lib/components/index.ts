@@ -18,3 +18,4 @@ export { default as SegmentedControl } from './SegmentedControl.svelte';
 export { default as StarField } from './StarField.svelte';
 export { default as PasswordLogin } from './PasswordLogin.svelte';
 export { default as PinUnlock } from './PinUnlock.svelte';
+export { default as AccountSetup } from './AccountSetup.svelte';

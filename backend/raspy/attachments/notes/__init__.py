@@ -33,24 +33,32 @@ class Notes(BaseAttachment):
     version = "1.0.0"
 
     async def on_load(self, ctx: AttachmentContext) -> None:
+        # Per-account tables created lazily in _ensure() (name depends on the
+        # requesting account, unknown at load).
+        self._ready: set[str] = set()
+
+    async def _ensure(self) -> str:
         t = self.db.table("notes")
-        await self.db.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {t} (
-                id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                title   TEXT NOT NULL,
-                body    TEXT NOT NULL DEFAULT '',
-                created REAL NOT NULL,
-                updated REAL NOT NULL
+        if t not in self._ready:
+            await self.db.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {t} (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title   TEXT NOT NULL,
+                    body    TEXT NOT NULL DEFAULT '',
+                    created REAL NOT NULL,
+                    updated REAL NOT NULL
+                )
+                """
             )
-            """
-        )
+            self._ready.add(t)
+        return t
 
     def router(self) -> APIRouter:
         r = APIRouter()
-        t = self.db.table("notes")
 
         async def _row(note_id: int) -> dict[str, Any]:
+            t = await self._ensure()
             row = await self.db.fetch_one(f"SELECT * FROM {t} WHERE id = ?", (note_id,))
             if row is None:
                 raise HTTPException(404, "note not found")
@@ -58,10 +66,12 @@ class Notes(BaseAttachment):
 
         @r.get("/notes")
         async def list_notes() -> list[dict[str, Any]]:
+            t = await self._ensure()
             return await self.db.fetch_all(f"SELECT * FROM {t} ORDER BY updated DESC")
 
         @r.post("/notes", status_code=201)
         async def create_note(body: NoteCreate) -> dict[str, Any]:
+            t = await self._ensure()
             now = time.time()
             new_id = await self.db.execute_insert(
                 f"INSERT INTO {t} (title, body, created, updated) VALUES (?, ?, ?, ?)",
@@ -73,6 +83,7 @@ class Notes(BaseAttachment):
 
         @r.patch("/notes/{note_id}")
         async def update_note(note_id: int, body: NoteUpdate) -> dict[str, Any]:
+            t = await self._ensure()
             await _row(note_id)
             sets: list[str] = []
             params: list[Any] = []
@@ -95,6 +106,7 @@ class Notes(BaseAttachment):
 
         @r.delete("/notes/{note_id}", status_code=204)
         async def delete_note(note_id: int) -> None:
+            t = await self._ensure()
             await _row(note_id)
             await self.db.execute(f"DELETE FROM {t} WHERE id = ?", (note_id,))
             self.events.publish("notes.deleted", {"id": note_id})

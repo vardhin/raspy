@@ -120,19 +120,41 @@ class Database:
 
 
 class ScopedDB:
-    """A database handle scoped to one attachment.
+    """A database handle scoped to one attachment *and* the current account.
 
-    ``table("items")`` -> ``"att_todo_items"``. Pass that into your SQL. The scope
-    is purely a naming convention enforced at construction; it keeps attachment
-    tables namespaced and greppable.
+    ``table("items")`` -> ``"att_todo_items"`` for the original admin (legacy,
+    unsuffixed — preserves data that predates per-account isolation), or
+    ``"att_todo_u1a2b3c4_items"`` for a child account, where the middle token is
+    ``account_slug(username)``. Pass the result into your SQL.
+
+    The account is read from the ``current_account`` ContextVar **at call time**
+    (set by the auth gate per request), NOT captured at construction — so a single
+    attachment instance serves every account, each landing in its own tables.
+    Attachments must therefore call ``table()`` *inside* a request handler, not
+    once at load time.
+
+    The scope is a naming convention enforced here; it keeps attachment tables
+    namespaced, per-account isolated, and greppable.
     """
 
     def __init__(self, db: Database, attachment_id: str) -> None:
         self._db = db
-        self._prefix = f"att_{_validate_ident(attachment_id, 'attachment id')}_"
+        self._att = _validate_ident(attachment_id, "attachment id")
+
+    def _prefix(self) -> str:
+        # Imported lazily to avoid a core<->auth import cycle at module load.
+        from .auth.scope import account_slug, current_account, current_account_legacy
+
+        username = current_account.get()
+        # Legacy/global scope: the original admin, or any context with no account
+        # set (background tasks, pre-isolation tests) — keep the historical
+        # unsuffixed prefix so existing data stays reachable.
+        if username is None or current_account_legacy.get():
+            return f"att_{self._att}_"
+        return f"att_{self._att}_{account_slug(username)}_"
 
     def table(self, name: str) -> str:
-        return self._prefix + _validate_ident(name, "table name")
+        return self._prefix() + _validate_ident(name, "table name")
 
     # Thin pass-throughs so attachments never touch the global Database directly.
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:

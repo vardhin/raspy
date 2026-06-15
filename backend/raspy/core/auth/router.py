@@ -22,6 +22,7 @@ from .deps import (
     client_ip,
     get_auth,
     refresh_token_from,
+    require_admin,
 )
 from .service import AuthError, AuthService, LoginResult
 
@@ -32,10 +33,35 @@ class LoginBody(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     # auth_key = Argon2id(password) computed client-side; never the raw password.
     auth_key: str = Field(min_length=1, max_length=512)
+    # Required only for frozen child accounts using temporary credentials.
+    pin: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class UnlockBody(BaseModel):
     pin: str = Field(min_length=1, max_length=256)
+
+
+class CompleteSetupBody(BaseModel):
+    # New auth_key (= Argon2id(new password) client-side) + new PIN, set by a
+    # frozen child on first sign-in. The admin never sees these.
+    auth_key: str = Field(min_length=1, max_length=512)
+    pin: str = Field(min_length=1, max_length=256)
+
+
+class CreateChildBody(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    # The browser generates the temp password and salts, derives auth_key from
+    # that temp password, and sends only auth_key here. The admin relays the temp
+    # password/PIN to the child; the server never needs to see the raw password.
+    auth_key: str = Field(min_length=1, max_length=512)
+    temp_pin: str = Field(min_length=1, max_length=256)
+    auth_salt: str = Field(min_length=1, max_length=128)
+    master_salt: str = Field(min_length=1, max_length=128)
+    allowed_apps: list[str] = Field(default_factory=list)
+
+
+class UpdateChildBody(BaseModel):
+    allowed_apps: list[str] = Field(default_factory=list)
 
 
 def _settings(request: Request) -> Settings:
@@ -72,6 +98,8 @@ def _body(result: LoginResult, csrf: str) -> dict:
     # and rides the cookies.
     return {
         "username": result.username,
+        "role": result.role,
+        "must_reset": result.must_reset,
         "access_token": result.access_token,
         "refresh_token": result.refresh_token,
         "csrf_token": csrf,
@@ -109,7 +137,7 @@ async def login(
     svc: AuthService = Depends(get_auth),
 ):
     try:
-        result = await svc.login(body.username, body.auth_key, ip=_ip(request))
+        result = await svc.login(body.username, body.auth_key, pin=body.pin, ip=_ip(request))
     except AuthError as exc:
         raise _auth_error(exc)
     csrf = _set_session_cookies(request, response, result)
@@ -165,6 +193,100 @@ async def session(request: Request, svc: AuthService = Depends(get_auth)):
 
     principal = principal_from_request(request)
     if principal is not None:
-        return {"authenticated": True, "needs": "none", "username": principal.username}
+        # A frozen child holds a valid token but may do nothing except finish
+        # setup — surface that as needs:'reset' so the client shows the reset
+        # screen instead of the app.
+        needs = "reset" if principal.must_reset else "none"
+        return {
+            "authenticated": True,
+            "needs": needs,
+            "username": principal.username,
+            "role": principal.role,
+        }
     needs = await svc.session_state(refresh_token_from(request))
     return {"authenticated": False, "needs": needs}
+
+
+@router.post("/complete-setup", status_code=204)
+async def complete_setup(
+    request: Request, response: Response, body: CompleteSetupBody,
+    svc: AuthService = Depends(get_auth),
+):
+    """A frozen child sets its real password + PIN on first sign-in. Requires the
+    (valid) temp session; afterwards the session is revoked so the child logs in
+    fresh with the new creds."""
+    token = refresh_token_from(request)
+    if not token:
+        raise HTTPException(401, "no refresh token")
+    check_csrf(request, _settings(request).auth)
+    try:
+        await svc.complete_setup(token, body.auth_key, body.pin, ip=_ip(request))
+    except AuthError as exc:
+        raise _auth_error(exc)
+    # Revoked server-side — clear cookies so the client returns to the password
+    # screen and signs in with the new credentials.
+    _clear_session_cookies(response)
+
+
+# --- admin: child account management (admin only) ----------------------------
+
+
+@router.get("/admin/apps")
+async def admin_list_apps(request: Request, _=Depends(require_admin)):
+    """Grantable apps (id/title/icon) for the per-account permission checklist —
+    excludes admin-only apps that can't be isolated (accounts/files/stats)."""
+    from ..manifest import _ADMIN_ONLY
+
+    registry = request.app.state.registry
+    return [
+        {"id": e["id"], "title": e["title"], "icon": e["icon"]}
+        for e in registry.manifest()
+        if e["id"] not in _ADMIN_ONLY
+    ]
+
+
+@router.get("/admin/accounts")
+async def admin_list_accounts(svc: AuthService = Depends(get_auth), _=Depends(require_admin)):
+    return await svc.list_accounts()
+
+
+@router.post("/admin/accounts", status_code=201)
+async def admin_create_account(
+    request: Request, body: CreateChildBody,
+    svc: AuthService = Depends(get_auth), _=Depends(require_admin),
+):
+    """Create a frozen child with browser-generated temp credentials."""
+    check_csrf(request, _settings(request).auth)
+    try:
+        await svc.create_child(
+            body.username, body.auth_key, body.temp_pin,
+            auth_salt=body.auth_salt, master_salt=body.master_salt,
+            allowed_apps=body.allowed_apps,
+        )
+    except AuthError as exc:
+        raise HTTPException(409, str(exc))
+    return {"username": body.username, "role": "child", "allowed_apps": sorted(set(body.allowed_apps))}
+
+
+@router.patch("/admin/accounts/{username}", status_code=204)
+async def admin_update_account(
+    request: Request, username: str, body: UpdateChildBody,
+    svc: AuthService = Depends(get_auth), _=Depends(require_admin),
+):
+    check_csrf(request, _settings(request).auth)
+    try:
+        await svc.set_allowed_apps(username, body.allowed_apps)
+    except AuthError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.delete("/admin/accounts/{username}", status_code=204)
+async def admin_delete_account(
+    request: Request, username: str,
+    svc: AuthService = Depends(get_auth), _=Depends(require_admin),
+):
+    check_csrf(request, _settings(request).auth)
+    try:
+        await svc.delete_account(username)
+    except AuthError as exc:
+        raise HTTPException(400, str(exc))

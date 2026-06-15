@@ -215,6 +215,15 @@ def vault(*, title: str | None = None) -> UINode:
     return _node("vault", title=title)
 
 
+def accounts(*, title: str | None = None) -> UINode:
+    """The admin-only account management UI. The shell component lists child
+    accounts, creates them (username + temp password/PIN + per-app checklist),
+    edits each account's allowed apps, and deletes accounts — all via the
+    ``/api/auth/admin/*`` endpoints (admin only). One composite Tier-1 node.
+    """
+    return _node("accounts", title=title)
+
+
 # --- action helpers ---------------------------------------------------------
 
 

@@ -12,6 +12,7 @@
 	import Vault from './Vault.svelte';
 	import Vibe from './Vibe.svelte';
 	import Calendar from './Calendar.svelte';
+	import Accounts from './Accounts.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -161,6 +162,8 @@
 	<Vibe />
 {:else if node.type === 'calendar'}
 	<Calendar />
+{:else if node.type === 'accounts'}
+	<Accounts />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

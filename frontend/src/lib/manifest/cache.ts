@@ -5,17 +5,19 @@
 import { kvGet, kvSet } from '$lib/kv';
 import type { Manifest } from './types';
 
-const KEY = 'manifest';
+function keyFor(accountKey: string): string {
+	return `manifest:${accountKey}`;
+}
 
 export interface CachedManifest {
 	etag: string | null;
 	manifest: Manifest;
 }
 
-export function readManifest(): Promise<CachedManifest | null> {
-	return kvGet<CachedManifest>(KEY);
+export function readManifest(accountKey: string): Promise<CachedManifest | null> {
+	return kvGet<CachedManifest>(keyFor(accountKey));
 }
 
-export function writeManifest(entry: CachedManifest): Promise<void> {
-	return kvSet(KEY, entry);
+export function writeManifest(accountKey: string, entry: CachedManifest): Promise<void> {
+	return kvSet(keyFor(accountKey), entry);
 }

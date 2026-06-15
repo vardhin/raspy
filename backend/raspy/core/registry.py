@@ -54,6 +54,9 @@ class AttachmentRegistry:
     db: Database
     events: EventBus
     notifications: NotificationService | None = None
+    # Auth service, so attachments can enumerate accounts for per-account
+    # background work (mail poller). Optional — None when auth is unavailable.
+    auth: Any = None
 
     loaded: dict[str, LoadedAttachment] = field(default_factory=dict)
     errors: list[AttachmentError] = field(default_factory=list)
@@ -186,6 +189,7 @@ class AttachmentRegistry:
             config=self.settings.attachment_config(inst.id),
             notifications=self.notifications,
             attachment_id=inst.id,
+            accounts_provider=(self.auth.list_accounts if self.auth else None),
         )
         inst.ctx = ctx
         await inst.on_load(ctx)

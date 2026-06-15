@@ -49,39 +49,53 @@ class Vault(BaseAttachment):
     icon = "lock"
     version = "1.0.0"
 
-    _dir: Path
-
     async def on_load(self, ctx: AttachmentContext) -> None:
-        self._dir = ctx.data_dir / "blobs"
-        self._dir.mkdir(parents=True, exist_ok=True)
-        t = self.db.table("blobs")
-        await self.db.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {t} (
-                hash    TEXT PRIMARY KEY,
-                size    INTEGER NOT NULL,
-                created REAL NOT NULL
-            )
-            """
-        )
+        # The blobs table is created lazily per account in _ensure() — its name
+        # depends on who is asking (per-account isolation), which isn't known at
+        # load time. Track which account namespaces we've already created.
+        self._ready: set[str] = set()
 
-    # --- helpers -------------------------------------------------------------
+    # --- per-account storage (resolved at request time) ---------------------
+
+    def _dir(self) -> Path:
+        """This account's blob dir. Each account has its own isolated tree."""
+        d = self.account_data_dir / "blobs"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    async def _ensure(self) -> str:
+        """Create this account's blobs table on first touch; return its name."""
+        t = self.db.table("blobs")
+        if t not in self._ready:
+            await self.db.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {t} (
+                    hash    TEXT PRIMARY KEY,
+                    size    INTEGER NOT NULL,
+                    created REAL NOT NULL
+                )
+                """
+            )
+            self._ready.add(t)
+        return t
 
     def _blob_path(self, h: str) -> Path:
         # Shard by first 2 hex chars to avoid one huge directory.
-        sub = self._dir / h[:2]
+        sub = self._dir() / h[:2]
         sub.mkdir(parents=True, exist_ok=True)
         return sub / h
 
+    def _manifest_path(self) -> Path:
+        return self.account_data_dir / _MANIFEST_NAME
+
     def router(self) -> APIRouter:
         r = APIRouter()
-        t = self.db.table("blobs")
-        manifest_path = self._dir.parent / _MANIFEST_NAME
 
         # --- manifest (one opaque encrypted blob) ---------------------------
 
         @r.get("/manifest")
         async def get_manifest() -> Response:
+            manifest_path = self._manifest_path()
             if not manifest_path.is_file():
                 # Empty vault — client treats 204 as "no manifest yet".
                 return Response(status_code=204)
@@ -92,6 +106,7 @@ class Vault(BaseAttachment):
             data = await request.body()
             if len(data) > 50 * 1024 * 1024:
                 raise HTTPException(413, "manifest too large")
+            manifest_path = self._manifest_path()
             tmp = manifest_path.with_suffix(".tmp")
             tmp.write_bytes(data)
             tmp.replace(manifest_path)  # atomic
@@ -103,10 +118,12 @@ class Vault(BaseAttachment):
         async def list_blobs() -> list[dict[str, Any]]:
             """Hashes + sizes only — no content, no names (names are inside the
             encrypted manifest). Lets the client reconcile / GC."""
+            t = await self._ensure()
             return await self.db.fetch_all(f"SELECT hash, size, created FROM {t}")
 
         @r.put("/blob/{blob_hash}", status_code=201)
         async def put_blob(blob_hash: str, request: Request) -> dict[str, Any]:
+            t = await self._ensure()
             h = _validate_hash(blob_hash)
             path = self._blob_path(h)
             # Stream to a temp file while hashing, so we never hold a huge blob in
@@ -136,6 +153,7 @@ class Vault(BaseAttachment):
 
         @r.get("/blob/{blob_hash}")
         async def get_blob(blob_hash: str) -> StreamingResponse:
+            t = await self._ensure()
             h = _validate_hash(blob_hash)
             path = self._blob_path(h)
             if not path.is_file():
@@ -159,6 +177,7 @@ class Vault(BaseAttachment):
 
         @r.delete("/blob/{blob_hash}", status_code=204)
         async def delete_blob(blob_hash: str) -> None:
+            t = await self._ensure()
             h = _validate_hash(blob_hash)
             self._blob_path(h).unlink(missing_ok=True)
             await self.db.execute(f"DELETE FROM {t} WHERE hash = ?", (h,))

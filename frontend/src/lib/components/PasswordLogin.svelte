@@ -11,7 +11,7 @@
 
 	async function submit(e: Event) {
 		e.preventDefault();
-		await auth.login(username, password);
+		await auth.login(username, password, pin || undefined);
 		if (auth.state === 'active' && pin) {
 			// Wrap the in-memory master key under the PIN for future quick unlocks.
 			try {
@@ -40,7 +40,7 @@
 				/>
 				<Field
 					type="password"
-					label="Mini-PIN (for quick unlock)"
+					label="PIN"
 					bind:value={pin}
 					inputmode="numeric"
 					autocomplete="off"

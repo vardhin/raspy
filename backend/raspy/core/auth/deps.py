@@ -27,6 +27,13 @@ CSRF_HEADER = "x-csrf-token"
 class Principal:
     username: str
     family_id: str
+    role: str = "admin"
+    # True when the account is frozen pending first-time password/PIN reset.
+    must_reset: bool = False
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
 def get_auth(request: Request) -> AuthService:
@@ -83,7 +90,13 @@ def principal_from_request(request: Request) -> Principal | None:
     fam = claims.get("fam")
     if not isinstance(sub, str) or not isinstance(fam, str):
         return None
-    return Principal(username=sub, family_id=fam)
+    role = claims.get("role")
+    return Principal(
+        username=sub,
+        family_id=fam,
+        role=role if isinstance(role, str) else "admin",
+        must_reset=bool(claims.get("mr")),
+    )
 
 
 def require_auth(request: Request, svc: AuthService = Depends(get_auth)) -> Principal:
@@ -95,6 +108,15 @@ def require_auth(request: Request, svc: AuthService = Depends(get_auth)) -> Prin
 
 def optional_auth(request: Request) -> Principal | None:
     return principal_from_request(request)
+
+
+def require_admin(request: Request, svc: AuthService = Depends(get_auth)) -> Principal:
+    """Like :func:`require_auth` but also 403s non-admins. Stateless: the role is
+    read from the (signed) access-token claims via the Principal."""
+    principal = require_auth(request, svc)
+    if not principal.is_admin:
+        raise HTTPException(403, "admin only")
+    return principal
 
 
 def check_csrf(request: Request, settings: AuthSettings) -> None:

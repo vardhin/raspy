@@ -78,22 +78,30 @@ class Calendar(BaseAttachment):
     icon = "calendar"
     version = "1.0.0"
 
-    _blob_dir: Path
     _vibe: DailyVibeStore
     _scheduler: asyncio.Task[None] | None = None
     _wake: asyncio.Event
 
     async def on_load(self, ctx: AttachmentContext) -> None:
-        self._blob_dir = ctx.data_dir / "photos"
-        self._blob_dir.mkdir(parents=True, exist_ok=True)
-        # Share the vibe app's cache so an empty day shows that day's vibe.
+        # Share the vibe app's cache so an empty day shows that day's vibe. This
+        # daily image/quote is intentionally global (one Pi, one "day"), so it
+        # stays unscoped even though per-account entries/photos are isolated.
         # data_dir is data/att/calendar; the sibling vibe cache is data/att/vibe/cache.
         vibe_cache = ctx.data_dir.parent / "vibe" / "cache"
         self._vibe = DailyVibeStore(vibe_cache)
         self._wake = asyncio.Event()
+        # Per-account tables created lazily in _ensure() (names depend on the
+        # requesting/iterated account, unknown at load).
+        self._ready: set[str] = set()
+        self._scheduler = asyncio.create_task(self._reminder_loop())
 
+    async def _ensure(self) -> tuple[str, str]:
+        """Create this account's calendar tables on first touch; return
+        ``(entries_table, images_table)``."""
         e = self.db.table("entries")
         img = self.db.table("images")
+        if e in self._ready:
+            return e, img
         await self.db.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {e} (
@@ -139,7 +147,13 @@ class Calendar(BaseAttachment):
         await self.db.execute(
             f"CREATE INDEX IF NOT EXISTS {img}_entry ON {img} (entry_id, ord)"
         )
-        self._scheduler = asyncio.create_task(self._reminder_loop())
+        self._ready.add(e)
+        return e, img
+
+    def _blob_dir(self) -> Path:
+        d = self.account_data_dir / "photos"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     async def on_shutdown(self) -> None:
         if self._scheduler is not None:
@@ -153,7 +167,7 @@ class Calendar(BaseAttachment):
     # --- blob helpers --------------------------------------------------------
 
     def _blob_path(self, h: str) -> Path:
-        sub = self._blob_dir / h[:2]
+        sub = self._blob_dir() / h[:2]
         sub.mkdir(parents=True, exist_ok=True)
         return sub / h
 
@@ -190,28 +204,21 @@ class Calendar(BaseAttachment):
 
         Durable: reads the DB each pass, so reminders set before a restart still
         fire. Wakes early when a new reminder is created/changed (via ``_wake``).
+        Iterates every account in its own isolated scope so each user's calendar
+        entries are checked against their own tables.
         """
-        e = self.db.table("entries")
         while True:
+            sleep = _SCHED_IDLE_S
             try:
-                now = time.time()
-                due = await self.db.fetch_all(
-                    f"SELECT * FROM {e} WHERE notified = 0 AND remind_at IS NOT NULL "
-                    f"AND remind_at <= ? ORDER BY remind_at LIMIT 50",
-                    (now,),
-                )
-                for row in due:
-                    await self._fire_reminder(row)
-
-                nxt = await self.db.fetch_one(
-                    f"SELECT MIN(remind_at) AS t FROM {e} "
-                    f"WHERE notified = 0 AND remind_at IS NOT NULL"
-                )
-                next_due = (nxt or {}).get("t")
-                if next_due is None:
-                    sleep = _SCHED_IDLE_S
-                else:
-                    sleep = max(1.0, min(_SCHED_IDLE_S, next_due - time.time()))
+                for acct in await self.ctx.list_accounts():
+                    is_admin = (acct.get("role") or "admin") == "admin"
+                    with self.ctx.account_scope(acct["username"], is_admin=is_admin):
+                        try:
+                            acct_sleep = await self._reminder_pass()
+                        except Exception:  # noqa: BLE001 - one account must not stall the rest
+                            log.exception("calendar reminder pass failed for an account")
+                            acct_sleep = _SCHED_IDLE_S
+                    sleep = min(sleep, acct_sleep)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - never let the loop die
@@ -222,6 +229,27 @@ class Calendar(BaseAttachment):
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+
+    async def _reminder_pass(self) -> float:
+        """Fire due reminders for the current account; return seconds until its
+        next due reminder (or the idle cap)."""
+        e, _ = await self._ensure()
+        now = time.time()
+        due = await self.db.fetch_all(
+            f"SELECT * FROM {e} WHERE notified = 0 AND remind_at IS NOT NULL "
+            f"AND remind_at <= ? ORDER BY remind_at LIMIT 50",
+            (now,),
+        )
+        for row in due:
+            await self._fire_reminder(row)
+        nxt = await self.db.fetch_one(
+            f"SELECT MIN(remind_at) AS t FROM {e} "
+            f"WHERE notified = 0 AND remind_at IS NOT NULL"
+        )
+        next_due = (nxt or {}).get("t")
+        if next_due is None:
+            return _SCHED_IDLE_S
+        return max(1.0, min(_SCHED_IDLE_S, next_due - time.time()))
 
     async def _fire_reminder(self, row: dict[str, Any]) -> None:
         e = self.db.table("entries")
@@ -241,10 +269,9 @@ class Calendar(BaseAttachment):
 
     def router(self) -> APIRouter:
         r = APIRouter()
-        e = self.db.table("entries")
-        img = self.db.table("images")
 
         async def _row(entry_id: int) -> dict[str, Any]:
+            e, _ = await self._ensure()
             row = await self.db.fetch_one(f"SELECT * FROM {e} WHERE id = ?", (entry_id,))
             if row is None:
                 raise HTTPException(404, "entry not found")
@@ -266,6 +293,7 @@ class Calendar(BaseAttachment):
             if span > _MAX_RANGE_DAYS:
                 raise HTTPException(400, f"range too large (max {_MAX_RANGE_DAYS} days)")
 
+            e, _ = await self._ensure()
             rows = await self.db.fetch_all(
                 f"SELECT * FROM {e} WHERE date >= ? AND date <= ? "
                 f"ORDER BY date, created",
@@ -300,6 +328,7 @@ class Calendar(BaseAttachment):
 
         @r.post("/entries", status_code=201)
         async def create_entry(body: EntryCreate) -> dict[str, Any]:
+            e, _ = await self._ensure()
             _valid_date(body.date)
             now = time.time()
             new_id = await self.db.execute_insert(
@@ -313,6 +342,7 @@ class Calendar(BaseAttachment):
 
         @r.patch("/entries/{entry_id}")
         async def update_entry(entry_id: int, body: EntryUpdate) -> dict[str, Any]:
+            e, _ = await self._ensure()
             await _row(entry_id)
             sets: list[str] = []
             params: list[Any] = []
@@ -346,6 +376,7 @@ class Calendar(BaseAttachment):
 
         @r.delete("/entries/{entry_id}", status_code=204)
         async def delete_entry(entry_id: int) -> None:
+            e, img = await self._ensure()
             row = await _row(entry_id)
             imgs = await self.db.fetch_all(
                 f"SELECT hash FROM {img} WHERE entry_id = ?", (entry_id,)
@@ -374,6 +405,7 @@ class Calendar(BaseAttachment):
             the secretstream header, ``mime`` is the (plaintext) declared type. The
             blob is content-addressed by the SHA-256 of the ciphertext, verified
             here — the only crypto the Pi does."""
+            e, img = await self._ensure()
             await _row(entry_id)
             data = await file.read()
             if not data:
@@ -415,6 +447,7 @@ class Calendar(BaseAttachment):
 
         @r.delete("/images/{image_id}", status_code=204)
         async def delete_image(image_id: int) -> None:
+            e, img = await self._ensure()
             row = await self.db.fetch_one(
                 f"SELECT entry_id, hash FROM {img} WHERE id = ?", (image_id,)
             )
@@ -431,6 +464,7 @@ class Calendar(BaseAttachment):
         @r.patch("/entries/{entry_id}/images/order", status_code=204)
         async def reorder_images(entry_id: int, body: dict[str, list[int]]) -> None:
             """Body: {"order": [imageId, imageId, …]} in the desired display order."""
+            e, img = await self._ensure()
             await _row(entry_id)
             order = body.get("order", [])
             for i, image_id in enumerate(order):
@@ -445,6 +479,7 @@ class Calendar(BaseAttachment):
         async def get_image(blob_hash: str) -> Response:
             if not all(c in "0123456789abcdef" for c in blob_hash) or len(blob_hash) != 64:
                 raise HTTPException(400, "invalid hash")
+            _, img = await self._ensure()
             path = self._blob_path(blob_hash)
             if not path.is_file():
                 raise HTTPException(404, "image not found")

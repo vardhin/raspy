@@ -175,3 +175,63 @@ def test_logout_revokes(setup):
     assert client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf}).status_code == 204
     # Access cookie cleared; refresh revoked → can't refresh.
     assert client.post("/api/auth/refresh").status_code == 401
+
+
+def test_child_setup_requires_temp_pin_and_blocks_unallowed_apps(setup):
+    client, salt = setup
+    admin_csrf = _login(client, salt).json()["csrf_token"]
+    child_auth_salt = "bZVY7pC1n5EnlbS0K9uS3Q"
+    child_master_salt = "GUedB4CKNLIhKylxjXI5qw"
+    temp_key = kdf.derive_auth_key("temporary password", child_auth_salt)
+    r = client.post(
+        "/api/auth/admin/accounts",
+        json={
+            "username": "kid",
+            "auth_key": temp_key,
+            "temp_pin": "246810",
+            "auth_salt": child_auth_salt,
+            "master_salt": child_master_salt,
+            "allowed_apps": ["notes"],
+        },
+        headers={"X-CSRF-Token": admin_csrf},
+    )
+    assert r.status_code == 201, r.text
+
+    child_salts = client.get("/api/auth/kdf/kid").json()
+    assert child_salts["auth_salt"] == child_auth_salt
+    client.cookies.clear()
+    assert client.post(
+        "/api/auth/login", json={"username": "kid", "auth_key": temp_key}
+    ).status_code == 401
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "kid", "auth_key": temp_key, "pin": "000000"},
+    ).status_code == 401
+
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "kid", "auth_key": temp_key, "pin": "246810"},
+    )
+    assert login.status_code == 200, login.text
+    assert login.json()["must_reset"] is True
+    assert client.get("/api/auth/session").json()["needs"] == "reset"
+
+    new_key = kdf.derive_auth_key("new child password", child_salts["auth_salt"])
+    r = client.post(
+        "/api/auth/complete-setup",
+        json={"auth_key": new_key, "pin": "135790"},
+        headers={"X-CSRF-Token": login.json()["csrf_token"]},
+    )
+    assert r.status_code == 204, r.text
+
+    relogin = client.post(
+        "/api/auth/login",
+        json={"username": "kid", "auth_key": new_key, "pin": "135790"},
+    )
+    assert relogin.status_code == 200, relogin.text
+    assert relogin.json()["must_reset"] is False
+    app_ids = {a["id"] for a in client.get("/api/manifest").json()["attachments"]}
+    assert "notes" in app_ids
+    assert "vault" not in app_ids
+    assert client.get("/api/att/notes/notes").status_code == 200
+    assert client.get("/api/att/vault/manifest").status_code == 403

@@ -84,14 +84,15 @@ class Mail(BaseAttachment):
     _stop: asyncio.Event
     _wake: asyncio.Event
     _fetch_lock: asyncio.Lock
-    _fernet: Fernet
 
     async def on_load(self, ctx: AttachmentContext) -> None:
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
         self._fetch_lock = asyncio.Lock()
-        self._fernet = Fernet(_load_or_create_key(ctx.data_dir / "mail.key"))
-        await self._create_tables()
+        # Per-account encryption keys + table creation are resolved lazily (they
+        # depend on the requesting/iterated account, unknown at load).
+        self._fernets: dict[str, Fernet] = {}
+        self._ready: set[str] = set()
         self._poller = asyncio.create_task(self._poll_loop())
 
     async def on_shutdown(self) -> None:
@@ -103,6 +104,27 @@ class Mail(BaseAttachment):
             except asyncio.CancelledError:
                 pass
             self._poller = None
+
+    def _fernet(self) -> Fernet:
+        """Per-account Fernet over an app-password key in the account's data dir.
+        Each account encrypts its own Gmail passwords with its own key."""
+        key_path = self.account_data_dir / "mail.key"
+        cache_key = str(key_path)
+        f = self._fernets.get(cache_key)
+        if f is None:
+            f = Fernet(_load_or_create_key(key_path))
+            self._fernets[cache_key] = f
+        return f
+
+    async def _ensure(self) -> tuple[str, str]:
+        """Create this account's mail tables on first touch; return
+        ``(accounts_table, messages_table)``."""
+        accounts = self.db.table("accounts")
+        if accounts in self._ready:
+            return accounts, self.db.table("messages")
+        await self._create_tables()
+        self._ready.add(accounts)
+        return accounts, self.db.table("messages")
 
     async def _create_tables(self) -> None:
         accounts = self.db.table("accounts")
@@ -155,16 +177,16 @@ class Mail(BaseAttachment):
 
     def router(self) -> APIRouter:
         r = APIRouter()
-        accounts = self.db.table("accounts")
-        messages = self.db.table("messages")
 
         @r.get("/accounts")
         async def list_accounts() -> list[dict[str, Any]]:
+            accounts, _ = await self._ensure()
             rows = await self.db.fetch_all(f"SELECT * FROM {accounts} ORDER BY email")
             return [self._account_api(row) for row in rows]
 
         @r.post("/accounts", status_code=201)
         async def add_account(body: AccountCreate) -> dict[str, Any]:
+            accounts, _ = await self._ensure()
             address = body.email.lower().strip()
             password = _clean_app_password(body.app_password)
             try:
@@ -202,6 +224,7 @@ class Mail(BaseAttachment):
 
         @r.patch("/accounts/{account_id}")
         async def update_account(account_id: int, body: AccountUpdate) -> dict[str, Any]:
+            accounts, _ = await self._ensure()
             await self._account_row(account_id)
             sets: list[str] = []
             params: list[Any] = []
@@ -227,6 +250,7 @@ class Mail(BaseAttachment):
 
         @r.delete("/accounts/{account_id}", status_code=204)
         async def delete_account(account_id: int) -> None:
+            accounts, _ = await self._ensure()
             await self._account_row(account_id)
             await self.db.execute(f"DELETE FROM {accounts} WHERE id = ?", (account_id,))
             self.events.publish("mail.accounts.changed", {"id": account_id})
@@ -240,6 +264,7 @@ class Mail(BaseAttachment):
             limit: int = Query(default=100, ge=1, le=500),
             offset: int = Query(default=0, ge=0),
         ) -> list[dict[str, Any]]:
+            accounts, messages = await self._ensure()
             where = ["1 = 1"]
             params: list[Any] = []
             if q.strip():
@@ -275,6 +300,7 @@ class Mail(BaseAttachment):
 
         @r.get("/messages/{message_id}")
         async def get_message(message_id: int) -> dict[str, Any]:
+            accounts, messages = await self._ensure()
             row = await self.db.fetch_one(
                 f"""
                 SELECT m.*, a.email AS account_email
@@ -344,18 +370,26 @@ class Mail(BaseAttachment):
         }
 
     def _encrypt(self, value: str) -> str:
-        return self._fernet.encrypt(value.encode()).decode()
+        return self._fernet().encrypt(value.encode()).decode()
 
     def _decrypt(self, value: str) -> str:
         try:
-            return self._fernet.decrypt(value.encode()).decode()
+            return self._fernet().decrypt(value.encode()).decode()
         except InvalidToken as exc:
             raise RuntimeError("stored app password cannot be decrypted") from exc
 
     async def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                await self.fetch_due(force=False)
+                # Poll every account in its own isolated scope, so each user's
+                # mail tables + encryption key are the ones touched.
+                for acct in await self.ctx.list_accounts():
+                    is_admin = (acct.get("role") or "admin") == "admin"
+                    with self.ctx.account_scope(acct["username"], is_admin=is_admin):
+                        try:
+                            await self.fetch_due(force=False)
+                        except Exception:  # noqa: BLE001 - one account must not stall the rest
+                            pass
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - polling should not kill the app
@@ -367,7 +401,7 @@ class Mail(BaseAttachment):
                 pass
 
     async def fetch_due(self, *, force: bool) -> dict[str, Any]:
-        table = self.db.table("accounts")
+        table, _ = await self._ensure()
         now = time.time()
         if force:
             rows = await self.db.fetch_all(f"SELECT * FROM {table} WHERE active = 1")
@@ -387,6 +421,7 @@ class Mail(BaseAttachment):
 
     async def fetch_account(self, account_id: int) -> dict[str, Any]:
         async with self._fetch_lock:
+            await self._ensure()
             account = await self._account_row(account_id)
             if not account["active"]:
                 return {"account_id": account_id, "fetched": 0, "skipped": "inactive"}

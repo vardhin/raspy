@@ -39,8 +39,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
     try:
-        auth.verify_access(token)
+        claims = auth.verify_access(token)
     except AuthError:
+        await ws.close(code=1008)
+        return
+    # A frozen child (pending setup) gets no live feed.
+    if claims.get("mr"):
         await ws.close(code=1008)
         return
 

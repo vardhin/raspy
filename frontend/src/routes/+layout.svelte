@@ -7,7 +7,7 @@
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
-	import { Sidebar, Icon, PasswordLogin, PinUnlock } from '$lib/components';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { setAuthLostHandler } from '$lib/api';
 
@@ -22,10 +22,10 @@
 	function startServicesOnce() {
 		if (servicesStarted) return;
 		servicesStarted = true;
-		manifest.load();
 		connection.start();
 		notifications.start();
 	}
+	let manifestUser: string | null = null;
 
 	// When the tab regains focus, re-check the session: if the access token
 	// lapsed while we were away, this flips us to the PIN screen ("out of focus →
@@ -38,7 +38,16 @@
 	}
 
 	$effect(() => {
-		if (auth.state === 'active') startServicesOnce();
+		if (auth.state === 'active') {
+			startServicesOnce();
+			if (auth.username !== manifestUser) {
+				manifestUser = auth.username;
+				void manifest.load(auth.username ?? 'default');
+				notifications.refresh();
+			}
+		} else if (auth.state === 'password') {
+			manifestUser = null;
+		}
 	});
 
 	// Mobile off-canvas drawer state. The sidebar is always in the DOM; on mobile a
@@ -100,6 +109,8 @@
 	<PasswordLogin />
 {:else if auth.state === 'pin'}
 	<PinUnlock />
+{:else if auth.state === 'reset'}
+	<AccountSetup />
 {:else}
 <div class="shell" class:drawer-open={drawerOpen}>
 	<!-- Mobile-only top bar with the hamburger. Hidden at desktop widths. -->

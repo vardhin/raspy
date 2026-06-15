@@ -21,6 +21,7 @@ storing/comparing, so a DB leak doesn't expose a directly-usable credential.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -54,6 +55,12 @@ class LoginResult:
     refresh_token: str
     family_id: str
     username: str
+    # 'admin' | 'child'. Stamped so the client/router can branch without a
+    # second lookup.
+    role: str = "admin"
+    # True when the account is frozen pending first-time password/PIN reset; the
+    # only thing the client may do is POST /auth/complete-setup.
+    must_reset: bool = False
 
 
 class AuthError(Exception):
@@ -92,10 +99,20 @@ class AuthService:
                 -- and reach the client so the vault key is reproducible.
                 auth_salt   TEXT NOT NULL,
                 master_salt TEXT NOT NULL,
-                created    REAL NOT NULL
+                created    REAL NOT NULL,
+                -- 'admin' | 'child'. The original CLI-created account is admin by
+                -- default (no migration needed); children are made via the UI.
+                role        TEXT NOT NULL DEFAULT 'admin',
+                -- 1 = frozen pending first-time password/PIN reset (temp creds).
+                must_reset  INTEGER NOT NULL DEFAULT 0,
+                -- JSON list of attachment ids this account may see; NULL = all
+                -- (admin). Children get an explicit allow-list.
+                allowed_apps TEXT
             )
             """
         )
+        # Migrate already-deployed account tables that predate the columns above.
+        await self._migrate_account_columns()
         # One row per *live* refresh token. A family shares family_id; rotation
         # inserts a new row (new jti) and marks the old one used. Reuse of a used
         # row => theft => revoke the family.
@@ -144,6 +161,25 @@ class AuthService:
             )
             """
         )
+
+    async def _migrate_account_columns(self) -> None:
+        """Add the role/must_reset/allowed_apps columns to an account table that
+        was created before isolation existed. SQLite has no ``ADD COLUMN IF NOT
+        EXISTS``, so we introspect and add what's missing. Existing rows keep the
+        column defaults — i.e. the lone existing account becomes the admin with
+        ``allowed_apps`` NULL (all apps)."""
+        rows = await self._db.fetch_all(f"PRAGMA table_info({_T_ACCOUNT})")
+        have = {r["name"] for r in rows}
+        adds = {
+            "role": "TEXT NOT NULL DEFAULT 'admin'",
+            "must_reset": "INTEGER NOT NULL DEFAULT 0",
+            "allowed_apps": "TEXT",
+        }
+        for col, decl in adds.items():
+            if col not in have:
+                await self._db.execute(
+                    f"ALTER TABLE {_T_ACCOUNT} ADD COLUMN {col} {decl}"
+                )
 
     # --- account existence (for first-run / setup-mode checks) ---------------
 
@@ -209,6 +245,126 @@ class AuthService:
             f"VALUES (?, ?, ?, ?, ?, ?)",
             (username, pw_hash, pin_hash, auth_salt, master_salt, time.time()),
         )
+
+    async def create_child(
+        self, username: str, auth_key: str, pin: str,
+        auth_salt: str, master_salt: str, allowed_apps: list[str],
+    ) -> None:
+        """Create a frozen child account with admin-supplied temp credentials.
+
+        ``role='child'`` and ``must_reset=1`` so the first sign-in forces a
+        password+PIN reset (the admin never sees the new ones). ``allowed_apps``
+        is the explicit per-account app allow-list."""
+        if await self._get_account(username) is not None:
+            raise AuthError(f"account {username!r} already exists")
+        pw_hash = self._ph.hash(auth_key)
+        pin_hash = self._ph.hash(pin)
+        await self._db.execute(
+            f"INSERT INTO {_T_ACCOUNT} "
+            f"(username, pw_hash, pin_hash, auth_salt, master_salt, created, "
+            f" role, must_reset, allowed_apps) "
+            f"VALUES (?, ?, ?, ?, ?, ?, 'child', 1, ?)",
+            (username, pw_hash, pin_hash, auth_salt, master_salt, time.time(),
+             json.dumps(sorted(set(allowed_apps)))),
+        )
+
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        """All accounts (no hashes). ``allowed_apps`` decoded to a list (or None
+        for admins = all apps)."""
+        rows = await self._db.fetch_all(
+            f"SELECT username, role, must_reset, allowed_apps, created "
+            f"FROM {_T_ACCOUNT} ORDER BY created"
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            raw = r.get("allowed_apps")
+            out.append({
+                "username": r["username"],
+                "role": r["role"] or "admin",
+                "must_reset": bool(r["must_reset"]),
+                "allowed_apps": json.loads(raw) if raw else None,
+                "created": r["created"],
+            })
+        return out
+
+    async def role_of(self, username: str) -> str | None:
+        account = await self._get_account(username)
+        if account is None:
+            return None
+        return account.get("role") or "admin"
+
+    async def allowed_apps_of(self, username: str) -> list[str] | None:
+        """The account's app allow-list, or None = all apps (admins)."""
+        account = await self._get_account(username)
+        if account is None:
+            return []
+        raw = account.get("allowed_apps")
+        return json.loads(raw) if raw else None
+
+    async def set_allowed_apps(self, username: str, allowed_apps: list[str]) -> None:
+        account = await self._get_account(username)
+        if account is None:
+            raise AuthError(f"no such account {username!r}")
+        if (account.get("role") or "admin") == "admin":
+            raise AuthError("cannot restrict an admin account")
+        await self._db.execute(
+            f"UPDATE {_T_ACCOUNT} SET allowed_apps = ? WHERE username = ?",
+            (json.dumps(sorted(set(allowed_apps))), username),
+        )
+
+    async def delete_account(self, username: str) -> None:
+        """Delete a child account + revoke its sessions. Refuses admins (an admin
+        is never deletable via this path)."""
+        account = await self._get_account(username)
+        if account is None:
+            raise AuthError(f"no such account {username!r}")
+        if (account.get("role") or "admin") == "admin":
+            raise AuthError("cannot delete an admin account")
+        await self.revoke_all(username)
+        await self._db.execute(
+            f"DELETE FROM {_T_ACCOUNT} WHERE username = ?", (username,)
+        )
+
+    async def complete_setup(
+        self, refresh_token: str, new_auth_key: str, new_pin: str, *, ip: str | None
+    ) -> None:
+        """First-run reset for a frozen child: set the real password+PIN, clear
+        must_reset, and revoke the temp session so they log in fresh. Requires a
+        valid (non-revoked/used) refresh token for the frozen account."""
+        try:
+            claims = tokens.verify(self._secret, refresh_token, expected_type="refresh")
+        except tokens.TokenError as exc:
+            raise AuthError(f"invalid refresh: {exc}")
+        username = claims.get("sub")
+        jti = claims.get("jti")
+        tok_secret = claims.get("s")
+        if not isinstance(username, str):
+            raise AuthError("malformed refresh")
+        if not isinstance(jti, str) or not isinstance(tok_secret, str):
+            raise AuthError("malformed refresh")
+        row = await self._db.fetch_one(
+            f"SELECT * FROM {_T_REFRESH} WHERE jti = ?", (jti,)
+        )
+        if (
+            row is None
+            or row["revoked"]
+            or row["used"]
+            or row["expires"] < time.time()
+            or not self._verify(row["secret_hash"], tok_secret)
+        ):
+            raise AuthError("refresh revoked")
+        account = await self._get_account(username)
+        if account is None:
+            raise AuthError("no such account")
+        if not bool(account.get("must_reset")):
+            raise AuthError("account is not pending setup")
+        await self._db.execute(
+            f"UPDATE {_T_ACCOUNT} SET pw_hash = ?, pin_hash = ?, must_reset = 0 "
+            f"WHERE username = ?",
+            (self._ph.hash(new_auth_key), self._ph.hash(new_pin), username),
+        )
+        await self.revoke_all(username)
+        await self._audit("complete_setup", True, ip, username)
 
     async def set_pin(self, username: str, pin: str) -> None:
         if await self._get_account(username) is None:
@@ -276,7 +432,9 @@ class AuthService:
 
     # --- token minting -------------------------------------------------------
 
-    def _mint_access(self, username: str, family_id: str) -> str:
+    def _mint_access(
+        self, username: str, family_id: str, *, role: str = "admin", must_reset: bool = False
+    ) -> str:
         now = time.time()
         return tokens.sign(
             self._secret,
@@ -284,6 +442,12 @@ class AuthService:
                 "typ": "access",
                 "sub": username,
                 "fam": family_id,
+                # role + must_reset travel in the token so the gate and
+                # require_admin stay stateless (no DB hit per request). They go
+                # stale only until the next mint; complete_setup revokes + forces
+                # a fresh login, and a role change is rare + can revoke_all.
+                "role": role,
+                "mr": 1 if must_reset else 0,
                 "iat": int(now),
                 "exp": int(now + self._cfg.access_ttl_s),
             },
@@ -323,7 +487,9 @@ class AuthService:
 
     # --- public API ----------------------------------------------------------
 
-    async def login(self, username: str, auth_key: str, *, ip: str | None) -> LoginResult:
+    async def login(
+        self, username: str, auth_key: str, *, pin: str | None = None, ip: str | None
+    ) -> LoginResult:
         """Verify credentials and start a brand-new refresh family."""
         await self._check_locked("ip", ip or "?")
         await self._check_locked("account", username)
@@ -333,7 +499,14 @@ class AuthService:
         target_hash = account["pw_hash"] if account else self._dummy_hash
         ok = self._verify(target_hash, auth_key)
 
-        if not account or not ok:
+        role = (account or {}).get("role") or "admin"
+        must_reset = bool((account or {}).get("must_reset"))
+        pin_ok = True
+        if account and must_reset:
+            pin_hash = account.get("pin_hash")
+            pin_ok = bool(pin and pin_hash and self._verify(pin_hash, pin))
+
+        if not account or not ok or not pin_ok:
             await self._record_failure("ip", ip or "?")
             await self._record_failure("account", username)
             await self._audit("login", False, ip, username)
@@ -343,10 +516,10 @@ class AuthService:
         await self._reset_attempts("account", username)
 
         family_id = secrets.token_urlsafe(12)
-        access = self._mint_access(username, family_id)
+        access = self._mint_access(username, family_id, role=role, must_reset=must_reset)
         refresh = await self._mint_refresh(username, family_id)
         await self._audit("login", True, ip, username)
-        return LoginResult(access, refresh, family_id, username)
+        return LoginResult(access, refresh, family_id, username, role=role, must_reset=must_reset)
 
     async def refresh(self, refresh_token: str, *, ip: str | None) -> LoginResult:
         """Rotate a refresh token. Detects reuse and revokes the family."""
@@ -384,10 +557,13 @@ class AuthService:
         await self._db.execute(
             f"UPDATE {_T_REFRESH} SET used = 1 WHERE jti = ?", (jti,)
         )
-        access = self._mint_access(username, family_id)
+        account = await self._get_account(username)
+        role = (account or {}).get("role") or "admin"
+        must_reset = bool((account or {}).get("must_reset"))
+        access = self._mint_access(username, family_id, role=role, must_reset=must_reset)
         new_refresh = await self._mint_refresh(username, family_id)
         await self._audit("refresh", True, ip, username)
-        return LoginResult(access, new_refresh, family_id, username)
+        return LoginResult(access, new_refresh, family_id, username, role=role, must_reset=must_reset)
 
     async def unlock(self, refresh_token: str, pin: str, *, ip: str | None) -> LoginResult:
         """Mini-PIN re-unlock: needs a still-valid refresh token. Mints a new
@@ -436,10 +612,12 @@ class AuthService:
         await self._db.execute(
             f"UPDATE {_T_REFRESH} SET pin_fails = 0, used = 1 WHERE jti = ?", (jti,)
         )
-        access = self._mint_access(username, family_id)
+        role = (account or {}).get("role") or "admin"
+        must_reset = bool((account or {}).get("must_reset"))
+        access = self._mint_access(username, family_id, role=role, must_reset=must_reset)
         new_refresh = await self._mint_refresh(username, family_id)
         await self._audit("unlock", True, ip, username)
-        return LoginResult(access, new_refresh, family_id, username)
+        return LoginResult(access, new_refresh, family_id, username, role=role, must_reset=must_reset)
 
     async def logout(self, refresh_token: str | None) -> None:
         """Revoke the family of the presented refresh token (this device)."""
@@ -478,7 +656,8 @@ class AuthService:
     async def session_state(self, refresh_token: str | None) -> str:
         """What the client should show when there's no valid access token:
         'pin' if a usable (non-downgraded, unexpired) refresh exists,
-        else 'password'."""
+        else 'password'. A frozen child should always re-enter via the password
+        screen (its temp session is short-lived), so we never offer PIN there."""
         if not refresh_token:
             return "password"
         try:
@@ -491,6 +670,11 @@ class AuthService:
         )
         if row is None or row["revoked"] or row["downgraded"]:
             return "password"
+        username = claims.get("sub")
+        if isinstance(username, str):
+            account = await self._get_account(username)
+            if account is not None and bool(account.get("must_reset")):
+                return "password"
         return "pin"
 
     # --- helpers -------------------------------------------------------------

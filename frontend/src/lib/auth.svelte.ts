@@ -4,6 +4,7 @@
 //   'loading'  — initial; asking the server what we need
 //   'password' — no usable session; show full password login
 //   'pin'      — access token lapsed but refresh still valid; show mini-PIN
+//   'reset'    — frozen child signed in with temp credentials; set real password/PIN
 //   'active'   — authenticated; render the app
 //
 // The master_key (for the vault) lives only in memory here. On password login we
@@ -20,7 +21,7 @@ import {
 	hasWrappedMasterKey
 } from '$lib/crypto/keystore';
 
-export type AuthState = 'loading' | 'password' | 'pin' | 'active';
+export type AuthState = 'loading' | 'password' | 'pin' | 'reset' | 'active';
 
 interface KdfParams {
 	auth_salt: string;
@@ -29,8 +30,16 @@ interface KdfParams {
 
 interface SessionResp {
 	authenticated: boolean;
-	needs: 'none' | 'pin' | 'password';
+	needs: 'none' | 'pin' | 'password' | 'reset';
 	username?: string;
+	role?: 'admin' | 'child';
+}
+
+interface LoginResp {
+	username: string;
+	role: 'admin' | 'child';
+	must_reset: boolean;
+	csrf_token: string;
 }
 
 /** Read the readable CSRF cookie the server set, to echo in mutating requests. */
@@ -43,6 +52,7 @@ export function csrfToken(): string | null {
 class Auth {
 	state = $state<AuthState>('loading');
 	username = $state<string | null>(null);
+	role = $state<'admin' | 'child' | null>(null);
 	error = $state<string | null>(null);
 	busy = $state(false);
 
@@ -64,7 +74,12 @@ class Auth {
 			const data: SessionResp = await res.json();
 			if (data.authenticated && data.needs === 'none') {
 				this.username = data.username ?? null;
+				this.role = data.role ?? null;
 				this.state = 'active';
+			} else if (data.authenticated && data.needs === 'reset') {
+				this.username = data.username ?? null;
+				this.role = data.role ?? 'child';
+				this.state = 'reset';
 			} else if (data.needs === 'pin' && (await hasWrappedMasterKey())) {
 				this.state = 'pin';
 			} else {
@@ -76,7 +91,7 @@ class Auth {
 		}
 	}
 
-	async login(username: string, password: string): Promise<void> {
+	async login(username: string, password: string, pin?: string): Promise<void> {
 		this.busy = true;
 		this.error = null;
 		try {
@@ -86,18 +101,62 @@ class Auth {
 				method: 'POST',
 				credentials: 'include',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ username, auth_key: authKey })
+				body: JSON.stringify({ username, auth_key: authKey, ...(pin ? { pin } : {}) })
 			});
 			if (!res.ok) {
 				this.error = res.status === 429 ? 'Too many attempts — wait and retry.' : 'Invalid credentials.';
 				return;
 			}
+			const data = (await res.json()) as LoginResp;
+			this.username = data.username;
+			this.role = data.role;
+			if (data.must_reset) {
+				this.#masterKey = null;
+				this.state = 'reset';
+				return;
+			}
 			// Derive + hold the vault master key; never sent anywhere.
 			this.#masterKey = await deriveMasterKey(password, params.master_salt);
-			this.username = username;
 			this.state = 'active';
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Login failed.';
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	async completeSetup(newPassword: string, newPin: string): Promise<void> {
+		if (!this.username) {
+			this.error = 'No account is waiting for setup.';
+			return;
+		}
+		this.busy = true;
+		this.error = null;
+		const username = this.username;
+		try {
+			const params = await this.#kdf(username);
+			const authKey = await deriveAuthKey(newPassword, params.auth_salt);
+			const res = await fetch(apiUrl('/api/auth/complete-setup'), {
+				method: 'POST',
+				credentials: 'include',
+				headers: {
+					'content-type': 'application/json',
+					...(csrfToken() ? { 'x-csrf-token': csrfToken()! } : {})
+				},
+				body: JSON.stringify({ auth_key: authKey, pin: newPin })
+			});
+			if (!res.ok) {
+				this.error = 'Could not finish setup.';
+				return;
+			}
+			this.#masterKey = null;
+			await clearWrappedMasterKey();
+			await this.login(username, newPassword, newPin);
+			if (this.state === 'active') {
+				await this.setLocalPin(newPin);
+			}
+		} catch (e) {
+			this.error = e instanceof Error ? e.message : 'Setup failed.';
 		} finally {
 			this.busy = false;
 		}
@@ -167,6 +226,7 @@ class Auth {
 		this.#masterKey = null;
 		await clearWrappedMasterKey();
 		this.username = null;
+		this.role = null;
 		this.state = 'password';
 	}
 

@@ -19,6 +19,7 @@ from . import manifest, notifications, static, system, ws
 from .auth import AuthService
 from .auth import router as auth_router
 from .auth.deps import principal_from_request
+from .auth.scope import current_account, current_account_legacy
 from .auth.service import load_or_create_secret
 from .channel import ChannelService
 from .channel import router as channel_router
@@ -89,7 +90,8 @@ async def lifespan(app: FastAPI):
     app.state.notifications = notifier
 
     registry = AttachmentRegistry(
-        app=app, settings=settings, db=db, events=events, notifications=notifier
+        app=app, settings=settings, db=db, events=events, notifications=notifier,
+        auth=app.state.auth,
     )
     await registry.load_all()
     app.state.registry = registry
@@ -130,9 +132,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await call_next(request)  # static shell, etc.
         if path == "/api/ws" or any(path.startswith(p) for p in _PUBLIC_API_PREFIXES):
             return await call_next(request)
-        if principal_from_request(request) is None:
+        principal = principal_from_request(request)
+        if principal is None:
             return JSONResponse({"detail": "authentication required"}, status_code=401)
-        return await call_next(request)
+        # A frozen child (temp creds, not yet reset) may touch nothing but the
+        # auth endpoints (its only legal move is /api/auth/complete-setup).
+        if principal.must_reset:
+            return JSONResponse({"detail": "account setup required"}, status_code=403)
+        if not principal.is_admin and path.startswith("/api/att/"):
+            app_id = path.removeprefix("/api/att/").split("/", 1)[0]
+            svc = getattr(request.app.state, "auth", None)
+            allowed = await svc.allowed_apps_of(principal.username) if svc else []
+            if app_id in manifest._ADMIN_ONLY or app_id not in set(allowed or []):
+                return JSONResponse({"detail": "app not allowed"}, status_code=403)
+        # Per-account isolation: stamp who is asking so ScopedDB / data dirs land
+        # in this account's namespace. Admin keeps the legacy (unsuffixed) scope
+        # so its pre-isolation data stays reachable; children get an isolated one.
+        tok_account = current_account.set(principal.username)
+        tok_legacy = current_account_legacy.set(principal.is_admin)
+        try:
+            return await call_next(request)
+        finally:
+            current_account.reset(tok_account)
+            current_account_legacy.reset(tok_legacy)
 
     # Channel decrypt/encrypt (no-op unless the request carries a channel session
     # header AND the service is up). Reads the service lazily from app.state since

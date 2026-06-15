@@ -21,6 +21,7 @@ class ManifestStore {
 
 	#etag: string | null = null;
 	#started = false;
+	#accountKey = '';
 
 	byId(id: string): AttachmentManifest | undefined {
 		return this.attachments.find((a) => a.id === id);
@@ -31,11 +32,17 @@ class ManifestStore {
 		this.version = manifest.version;
 	}
 
-	async load(): Promise<void> {
-		if (this.#started) return;
+	async load(accountKey = 'default'): Promise<void> {
+		if (this.#started && this.#accountKey === accountKey) return;
+		this.#accountKey = accountKey;
 		this.#started = true;
+		this.#etag = null;
+		this.attachments = [];
+		this.version = null;
+		this.loading = true;
+		this.error = null;
 
-		const cached = await readManifest();
+		const cached = await readManifest(accountKey);
 		if (cached) {
 			this.#apply(cached.manifest);
 			this.#etag = cached.etag;
@@ -52,7 +59,7 @@ class ManifestStore {
 			const headers: Record<string, string> = { accept: 'application/json' };
 			if (this.#etag) headers['if-none-match'] = this.#etag;
 
-			const res = await fetch(apiUrl('/api/manifest'), { headers });
+			const res = await fetch(apiUrl('/api/manifest'), { credentials: 'include', headers });
 			if (res.status === 304) {
 				this.error = null;
 				return;
@@ -63,7 +70,7 @@ class ManifestStore {
 			this.#etag = res.headers.get('etag');
 			this.#apply(manifest);
 			this.error = null;
-			await writeManifest({ etag: this.#etag, manifest });
+			await writeManifest(this.#accountKey, { etag: this.#etag, manifest });
 		} catch (e) {
 			// Keep showing cache if we have one; only surface a hard error when empty.
 			if (this.attachments.length === 0) {

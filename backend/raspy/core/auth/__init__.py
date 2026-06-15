@@ -10,6 +10,16 @@ surface.
 from __future__ import annotations
 
 from .service import AuthService
-from .deps import require_auth, optional_auth, Principal
+from .deps import require_auth, require_admin, optional_auth, Principal
+from .scope import current_account, current_account_legacy, account_slug
 
-__all__ = ["AuthService", "require_auth", "optional_auth", "Principal"]
+__all__ = [
+    "AuthService",
+    "require_auth",
+    "require_admin",
+    "optional_auth",
+    "Principal",
+    "current_account",
+    "current_account_legacy",
+    "account_slug",
+]

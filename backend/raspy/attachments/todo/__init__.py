@@ -35,27 +35,36 @@ class Todo(BaseAttachment):
     # --- lifecycle ----------------------------------------------------------
 
     async def on_load(self, ctx: AttachmentContext) -> None:
+        # Per-account tables are created lazily in _ensure() — the table name
+        # depends on the requesting account (isolation), unknown at load time.
+        self._ready: set[str] = set()
+
+    async def _ensure(self) -> str:
+        """Create this account's items table on first touch; return its name."""
         t = self.db.table("items")
-        await self.db.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {t} (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                title     TEXT    NOT NULL,
-                done      INTEGER NOT NULL DEFAULT 0,
-                position  INTEGER NOT NULL DEFAULT 0,
-                created   REAL    NOT NULL,
-                updated   REAL    NOT NULL
+        if t not in self._ready:
+            await self.db.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {t} (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title     TEXT    NOT NULL,
+                    done      INTEGER NOT NULL DEFAULT 0,
+                    position  INTEGER NOT NULL DEFAULT 0,
+                    created   REAL    NOT NULL,
+                    updated   REAL    NOT NULL
+                )
+                """
             )
-            """
-        )
+            self._ready.add(t)
+        return t
 
     # --- API ----------------------------------------------------------------
 
     def router(self) -> APIRouter:
         r = APIRouter()
-        t = self.db.table("items")
 
         async def _row(item_id: int) -> dict[str, Any]:
+            t = await self._ensure()
             row = await self.db.fetch_one(f"SELECT * FROM {t} WHERE id = ?", (item_id,))
             if row is None:
                 raise HTTPException(404, "todo not found")
@@ -63,6 +72,7 @@ class Todo(BaseAttachment):
 
         @r.get("/items")
         async def list_items() -> list[dict[str, Any]]:
+            t = await self._ensure()
             rows = await self.db.fetch_all(
                 f"SELECT * FROM {t} ORDER BY done ASC, position ASC, id ASC"
             )
@@ -70,6 +80,7 @@ class Todo(BaseAttachment):
 
         @r.post("/items", status_code=201)
         async def create_item(body: TodoCreate) -> dict[str, Any]:
+            t = await self._ensure()
             now = time.time()
             max_pos = await self.db.fetch_one(
                 f"SELECT COALESCE(MAX(position), 0) AS m FROM {t}"
@@ -90,6 +101,7 @@ class Todo(BaseAttachment):
 
         @r.patch("/items/{item_id}")
         async def update_item(item_id: int, body: TodoUpdate) -> dict[str, Any]:
+            t = await self._ensure()
             await _row(item_id)  # 404 if missing
             sets: list[str] = []
             params: list[Any] = []
@@ -112,6 +124,7 @@ class Todo(BaseAttachment):
 
         @r.post("/items/{item_id}/toggle")
         async def toggle_item(item_id: int) -> dict[str, Any]:
+            t = await self._ensure()
             row = await _row(item_id)
             await self.db.execute(
                 f"UPDATE {t} SET done = ?, updated = ? WHERE id = ?",
@@ -123,12 +136,14 @@ class Todo(BaseAttachment):
 
         @r.delete("/items/{item_id}", status_code=204)
         async def delete_item(item_id: int) -> None:
+            t = await self._ensure()
             await _row(item_id)
             await self.db.execute(f"DELETE FROM {t} WHERE id = ?", (item_id,))
             self.events.publish("todo.deleted", {"id": item_id})
 
         @r.post("/clear-done", status_code=204)
         async def clear_done() -> None:
+            t = await self._ensure()
             await self.db.execute(f"DELETE FROM {t} WHERE done = 1")
             self.events.publish("todo.cleared", None)
 
