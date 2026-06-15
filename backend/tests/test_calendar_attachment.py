@@ -165,6 +165,44 @@ def test_due_reminder_fires_notification(cal_client: TestClient):
     assert notified, "due reminder did not produce a notification"
 
 
+def test_vibe_refresh_changes_image(tmp_path: Path, monkeypatch):
+    """A manual 'Fetch now' must yield a genuinely different image + a newer rev,
+    not the cached same-seed picture (bug fix)."""
+    # Serve a unique JPEG-ish blob per call so a re-fetch differs.
+    counter = {"n": 0}
+
+    def fake_get(url: str, **kw):
+        counter["n"] += 1
+        return b"\xff\xd8\xff" + bytes([counter["n"] % 256]) * 2048  # >1KB, varies
+
+    monkeypatch.setattr(_dailyvibe, "_http_get", fake_get)
+
+    from conftest import _seed_account
+    from raspy.config import AuthSettings
+
+    settings = Settings(
+        data_dir=tmp_path,
+        auth=AuthSettings(cookie_secure=False, argon_time_cost=1, argon_memory_kib=8, argon_parallelism=1),
+    )
+    _seed_account(settings)
+    app = create_app(settings)
+    with TestClient(app) as c:
+        from raspy.core.auth import kdf
+
+        auth_key = kdf.derive_auth_key("test-password", "PrXc0GEAlOveYCpyIegc0Q")
+        r = c.post("/api/auth/login", json={"username": "tester", "auth_key": auth_key})
+        c.headers.update({"X-CSRF-Token": r.json()["csrf_token"]})
+
+        first = c.get(VIBE + "/today").json()
+        img1 = c.get(VIBE + f"/image/{first['date']}", params={"v": first["rev"]}).content
+        time.sleep(0.01)
+        second = c.post(VIBE + "/refresh").json()
+        img2 = c.get(VIBE + f"/image/{second['date']}", params={"v": second["rev"]}).content
+
+        assert second["rev"] > first["rev"]
+        assert img1 != img2
+
+
 def test_vibe_today(cal_client: TestClient):
     data = cal_client.get(VIBE + "/today").json()
     assert data["quote"]

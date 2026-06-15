@@ -16,6 +16,7 @@
 		quote: string;
 		author: string;
 		font: string;
+		rev: number; // fetch timestamp; busts the <img> cache on a manual refresh
 	};
 
 	const ID = 'vibe';
@@ -25,8 +26,12 @@
 	let refreshing = $state(false);
 	let error = $state<string | null>(null);
 
-	// Absolute image URL (same-origin GET → cookie auth flows automatically).
-	let imageSrc = $derived(vibe ? attResourceUrl(ID, vibe.image_url, {}) : '');
+	// Absolute image URL (same-origin GET → cookie auth flows automatically). The
+	// `v=rev` param busts the browser cache so a manual "Fetch now" actually shows
+	// the new image (the path itself is stable per date).
+	let imageSrc = $derived(
+		vibe ? attResourceUrl(ID, vibe.image_url, { v: String(vibe.rev ?? 0) }) : ''
+	);
 	// The day's font, loaded via a <link> below. CSS-quote the family name.
 	let fontFamily = $derived(vibe ? `'${vibe.font}'` : 'inherit');
 	let fontHref = $derived(
@@ -86,7 +91,6 @@
 					{#if imageSrc}
 						<img src={imageSrc} alt="Vibe of {vibe.date}" />
 					{/if}
-					<div class="glow"></div>
 				</div>
 				<figcaption class="quote" style:font-family={fontFamily}>
 					<span class="mark">“</span>
@@ -150,25 +154,17 @@
 		border-radius: var(--radius-lg);
 		overflow: hidden;
 		border: var(--border-width) solid var(--border-color);
+		/* Accent lives ONLY as a glow behind the frame — the image is untouched. */
 		box-shadow:
 			var(--shadow-lg),
-			0 0 60px color-mix(in srgb, var(--vibe-accent) 60%, transparent);
+			0 0 90px -10px color-mix(in srgb, var(--vibe-accent) 75%, transparent),
+			0 12px 40px -8px color-mix(in srgb, var(--vibe-accent) 50%, transparent);
 	}
 	.frame img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
 		display: block;
-	}
-	.glow {
-		position: absolute;
-		inset: 0;
-		pointer-events: none;
-		background: linear-gradient(
-			to top,
-			color-mix(in srgb, var(--vibe-accent) 35%, transparent),
-			transparent 50%
-		);
 	}
 	.quote {
 		text-align: center;

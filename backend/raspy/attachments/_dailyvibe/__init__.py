@@ -119,6 +119,7 @@ class DailyVibe:
     quote: str
     author: str
     font: str            # Google font family name for the day
+    rev: float = 0.0     # fetch timestamp — used by the client to bust its cache
 
     def to_api(self, image_url: str) -> dict[str, Any]:
         return {
@@ -128,6 +129,7 @@ class DailyVibe:
             "quote": self.quote,
             "author": self.author,
             "font": self.font,
+            "rev": self.rev,
         }
 
 
@@ -189,6 +191,7 @@ class DailyVibeStore:
             quote=m.get("quote", ""),
             author=m.get("author", ""),
             font=m.get("font", MAGICAL_FONTS[0]),
+            rev=m.get("fetched", 0.0),
         )
 
     def ensure(self, date: str, *, force: bool = False) -> DailyVibe:
@@ -203,9 +206,14 @@ class DailyVibeStore:
             if existing is not None and existing.image_path is not None:
                 return existing
 
-        font = self._pick_font(date)
-        quote, author = self._fetch_quote(date)
-        img_bytes, accent = self._fetch_image(date)
+        # A per-call salt makes a *manual* refresh (force=True) pick a genuinely
+        # different image/quote/font; the default cold-cache path keeps the stable
+        # per-date seed so a given day is reproducible.
+        salt = str(time.time()) if force else ""
+
+        font = self._pick_font(date, salt)
+        quote, author = self._fetch_quote(date, salt)
+        img_bytes, accent = self._fetch_image(date, salt)
 
         img_path = self.image_path(date)
         try:
@@ -214,6 +222,7 @@ class DailyVibeStore:
             log.exception("failed writing vibe image for %s", date)
             img_path = None  # type: ignore[assignment]
 
+        now = time.time()
         vibe = DailyVibe(
             date=date,
             image_path=img_path,
@@ -221,6 +230,7 @@ class DailyVibeStore:
             quote=quote,
             author=author,
             font=font,
+            rev=now,
         )
         self._meta_path(date).write_text(
             json.dumps(
@@ -229,7 +239,7 @@ class DailyVibeStore:
                     "quote": quote,
                     "author": author,
                     "font": font,
-                    "fetched": time.time(),
+                    "fetched": now,
                 }
             )
         )
@@ -237,13 +247,12 @@ class DailyVibeStore:
 
     # --- fetchers ------------------------------------------------------------
 
-    def _pick_font(self, date: str) -> str:
-        rng = random.Random(_seed_for(date) + "font")
+    def _pick_font(self, date: str, salt: str = "") -> str:
+        rng = random.Random(_seed_for(date) + "font" + salt)
         return rng.choice(MAGICAL_FONTS)
 
-    def _fetch_quote(self, date: str) -> tuple[str, str]:
-        # Keyless public quote provider. ZenQuotes' /today is date-stable; if it
-        # fails we deterministically pick from the offline pool by date seed.
+    def _fetch_quote(self, date: str, salt: str = "") -> tuple[str, str]:
+        # Keyless public quote provider; if it fails we pick from the offline pool.
         try:
             raw = _http_get("https://zenquotes.io/api/random")
             data = json.loads(raw)
@@ -255,12 +264,12 @@ class DailyVibeStore:
                     return content, author
         except Exception as exc:  # noqa: BLE001 - offline / provider down → fallback
             log.info("quote fetch failed for %s (%r); using offline pool", date, exc)
-        rng = random.Random(_seed_for(date) + "quote")
+        rng = random.Random(_seed_for(date) + "quote" + salt)
         q = rng.choice(_FALLBACK_QUOTES)
         return q["content"], q["author"]
 
-    def _fetch_image(self, date: str) -> tuple[bytes, str]:
-        seed = _seed_for(date)
+    def _fetch_image(self, date: str, salt: str = "") -> tuple[bytes, str]:
+        seed = _seed_for(date + salt)
         url = f"https://picsum.photos/seed/{seed}/{_IMG_W}/{_IMG_H}"
         try:
             data = _http_get(url)
