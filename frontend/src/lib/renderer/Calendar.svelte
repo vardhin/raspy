@@ -29,11 +29,29 @@
 	} from '$lib/api';
 	import { connection } from '$lib/connection.svelte';
 	import { kvGet, kvSet } from '$lib/kv';
+	import { auth } from '$lib/auth.svelte';
+	import { encryptImage, hashCiphertext } from '$lib/crypto/calendarMedia';
+	import * as calendarCache from '$lib/crypto/calendarCache';
+	import { onDestroy } from 'svelte';
 
 	const ID = 'calendar';
 	const ZOOM_KEY = 'calendar:zoom';
 
-	type Img = { id: number; hash: string; mime: string; ord: number; url: string };
+	// Photos are end-to-end encrypted; the calendar is usable only once the vault
+	// master key is in memory (password login / PIN unlock).
+	let locked = $derived(auth.masterKey === null);
+
+	type Img = {
+		id: number;
+		hash: string;
+		mime: string;
+		ord: number;
+		url: string;
+		enc?: boolean;
+		key_wrapped?: string;
+		nonce_wrapped?: string;
+		header?: string;
+	};
 	type Entry = {
 		id: number;
 		date: string;
@@ -73,6 +91,50 @@
 	let entryIdx = $state<Record<string, number>>({});
 	// Per-day index into the shown entry's images (card carousel position).
 	let imgIdx = $state<Record<string, number>>({});
+
+	// hash -> decrypted object URL (or 'pending' while decrypting / 'error'). Drives
+	// the carousels: an image shows a spinner until its blob is decrypted on view.
+	let decrypted = $state<Record<string, string>>({});
+
+	// Decrypt one image (idempotent; cached). Updates `decrypted[hash]`.
+	function decrypt(img: Img): void {
+		if (!img.enc || !img.key_wrapped || !img.nonce_wrapped || !img.header) return;
+		if (decrypted[img.hash] && decrypted[img.hash] !== 'error') return;
+		decrypted[img.hash] = decrypted[img.hash] ?? 'pending';
+		calendarCache
+			.get({
+				hash: img.hash,
+				mime: img.mime,
+				key_wrapped: img.key_wrapped,
+				nonce_wrapped: img.nonce_wrapped,
+				header: img.header
+			})
+			.then((url) => (decrypted[img.hash] = url))
+			.catch(() => (decrypted[img.hash] = 'error'));
+	}
+
+	// As soon as days load (and the vault is unlocked), decrypt every photo so cards
+	// fill in "when they come into view" — the whole range is the view here.
+	$effect(() => {
+		if (locked) return;
+		for (const day of days)
+			for (const entry of day.entries) for (const im of entry.images) decrypt(im);
+	});
+
+	// Build carousel items for a set of images: a decrypted object URL when ready,
+	// otherwise a loading placeholder. Legacy (plaintext) rows fall back to the
+	// direct resource URL.
+	function imagesToItems(images: Img[], alt: string) {
+		return images
+			.slice()
+			.sort((a, b) => a.ord - b.ord)
+			.map((im) => {
+				if (!im.enc) return { src: attResourceUrl(ID, im.url, {}), alt };
+				const u = decrypted[im.hash];
+				if (u && u !== 'pending' && u !== 'error') return { src: u, alt };
+				return { src: '', alt, loading: u !== 'error' };
+			});
+	}
 
 	// --- date helpers --------------------------------------------------------
 	function todayISO(): string {
@@ -186,10 +248,7 @@
 		return day.entries[i];
 	}
 	function entryImages(entry: Entry) {
-		return entry.images
-			.slice()
-			.sort((a, b) => a.ord - b.ord)
-			.map((im) => ({ src: attResourceUrl(ID, im.url, {}), alt: entry.title }));
+		return imagesToItems(entry.images, entry.title);
 	}
 	function isPast(date: string): boolean {
 		return date < todayISO();
@@ -232,10 +291,7 @@
 	// What the polaroid preview shows: already-saved photos (when editing) followed
 	// by the pending ones, then the editor's title/description as the caption.
 	let previewImages = $derived([
-		...(editing?.images
-			.slice()
-			.sort((a, b) => a.ord - b.ord)
-			.map((im) => ({ src: attResourceUrl(ID, im.url, {}), alt: '' })) ?? []),
+		...(editing ? imagesToItems(editing.images, '') : []),
 		...pendingUrls.map((src) => ({ src, alt: '' }))
 	]);
 	let previewIdx = $state(0);
@@ -276,6 +332,22 @@
 		editorOpen = true;
 	}
 
+	// Encrypt a photo in the browser, then upload the opaque ciphertext with its
+	// wrapped key material as query params (the bytes the Pi stores are unreadable).
+	async function uploadEncrypted(entryId: number, file: File): Promise<void> {
+		const enc = await encryptImage(file);
+		const hash = await hashCiphertext(enc.ciphertext);
+		const ctFile = new File([enc.ciphertext as BlobPart], `${hash}.bin`, {
+			type: 'application/octet-stream'
+		});
+		await attUpload(ID, `entries/${entryId}/images`, {
+			mime: enc.mime,
+			key_wrapped: enc.keyWrapped,
+			nonce_wrapped: enc.nonceWrapped,
+			header: enc.header
+		}, ctFile);
+	}
+
 	async function saveEntry() {
 		uploadBusy = true;
 		error = null;
@@ -298,7 +370,7 @@
 				});
 			}
 			for (const file of pendingFiles) {
-				await attUpload(ID, `entries/${entry.id}/images`, {}, file);
+				await uploadEncrypted(entry.id, file);
 			}
 			editorOpen = false;
 			await load();
@@ -369,8 +441,30 @@
 		});
 		return () => offEvent?.();
 	});
+	onDestroy(() => {
+		calendarCache.clear();
+	});
+
+	// Drop decrypted photos + close any open view when the vault locks (keys gone).
+	$effect(() => {
+		if (locked) {
+			viewing = null;
+			editorOpen = false;
+			decrypted = {};
+			calendarCache.clear();
+		}
+	});
 </script>
 
+{#if locked}
+	<Surface level={2}>
+		<Stack gap={2} align="center">
+			<Icon name="lock" size={28} />
+			<Text role="heading">Calendar locked</Text>
+			<Text role="muted">Sign in with your password to view your memories.</Text>
+		</Stack>
+	</Surface>
+{:else}
 <Stack gap={3}>
 	<!-- Top bar -->
 	<Surface level={2}>
@@ -440,6 +534,7 @@
 									items={imgs}
 									compact
 									rounded={false}
+									fit="contain"
 									index={imgIdx[day.date] ?? 0}
 									onindex={(i) => (imgIdx[day.date] = i)}
 									onactivate={() => openView(entry)}
@@ -518,6 +613,7 @@
 		</div>
 	{/if}
 </Stack>
+{/if}
 
 <!-- Full view -->
 {#if viewing}
@@ -525,7 +621,13 @@
 	<Modal open title={viewing.title || 'Entry'} size="lg" onclose={() => (viewing = null)}>
 		<Stack gap={3}>
 			{#if imgs.length > 0}
-				<Carousel items={imgs} bind:index={viewIdx} />
+				<Carousel
+					items={imgs}
+					bind:index={viewIdx}
+					fit="contain"
+					allowFullscreen
+					allowLightsOff
+				/>
 			{/if}
 			{#if viewing.description}
 				<Text>{viewing.description}</Text>
@@ -627,8 +729,17 @@
 				<Text role="label">Photos</Text>
 				<div class="thumbs">
 					{#each editing.images.slice().sort((a, b) => a.ord - b.ord) as im (im.id)}
+						{@const src = im.enc
+							? decrypted[im.hash] && decrypted[im.hash] !== 'pending' && decrypted[im.hash] !== 'error'
+								? decrypted[im.hash]
+								: ''
+							: attResourceUrl(ID, im.url, {})}
 						<div class="thumb">
-							<img src={attResourceUrl(ID, im.url, {})} alt="" />
+							{#if src}
+								<img {src} alt="" />
+							{:else}
+								<div class="thumb-loading"><Icon name="refresh-cw" size={16} /></div>
+							{/if}
 							<button class="rm" aria-label="Remove photo" onclick={() => deleteImage(im)}>
 								<Icon name="x" size={13} />
 							</button>
@@ -982,6 +1093,23 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+	}
+	.thumb-loading {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		color: var(--muted);
+		background: var(--surface);
+	}
+	.thumb-loading :global(svg) {
+		animation: thumb-spin 1s linear infinite;
+	}
+	@keyframes thumb-spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 	.rm {
 		position: absolute;

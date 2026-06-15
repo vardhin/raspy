@@ -12,6 +12,7 @@ export { default as Modal } from './Modal.svelte';
 export { default as Accordion } from './Accordion.svelte';
 export { default as AccordionItem } from './AccordionItem.svelte';
 export { default as Carousel } from './Carousel.svelte';
+export { default as FullscreenCarousel } from './FullscreenCarousel.svelte';
 export { default as Slider } from './Slider.svelte';
 export { default as SegmentedControl } from './SegmentedControl.svelte';
 export { default as StarField } from './StarField.svelte';

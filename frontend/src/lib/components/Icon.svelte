@@ -67,7 +67,13 @@
 			'<line x1="1" y1="1" x2="23" y2="23"/><path d="M10.5 3H19a2 2 0 0 1 2 2v8.5"/><path d="M21 15l-5-5L5 21"/><path d="M3.5 3.5A2 2 0 0 0 3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 1.5-.5"/>',
 		'chevron-up': '<polyline points="18 15 12 9 6 15"/>',
 		plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-		clock4: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+		clock4: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+		maximize:
+			'<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
+		minimize:
+			'<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
+		sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+		moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'
 	};
 
 	const d = $derived(paths[name] ?? paths.square);

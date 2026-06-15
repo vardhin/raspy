@@ -11,9 +11,12 @@ that time via the core notification service — surviving restarts (it reads the
 boot, unlike the core's in-memory ``notify_later``).
 
 Photos are stored as content-addressed blobs in the attachment data dir (SHA-256 of
-the bytes), streamed back with their real mime type. They are NOT end-to-end
-encrypted (these are journal photos the server legitimately serves) — that's the
-deliberate difference from the zero-knowledge ``vault``.
+the *ciphertext*). They are **end-to-end encrypted** in the client with the vault
+master key (exactly like ``vault``): the Pi only ever stores opaque ciphertext plus
+the per-image data key *sealed under the master key* (``key_wrapped``) — useless
+without the password. Title/description/date stay plaintext in the DB so the
+server-side reminder scheduler can still build notification text and filter by date.
+Photos are served back as opaque ciphertext for the client to decrypt on view.
 """
 
 from __future__ import annotations
@@ -40,37 +43,6 @@ log = logging.getLogger("raspy.calendar")
 _MAX_IMAGE = 25 * 1024 * 1024  # 25 MiB per photo
 _MAX_RANGE_DAYS = 400  # guard the range endpoint
 _SCHED_IDLE_S = 60.0  # how long the reminder loop sleeps when nothing is due
-
-
-def _sniff_image_mime(data: bytes, declared: str) -> str | None:
-    """Best-effort image type. Trust a declared ``image/*`` type; otherwise sniff
-    the magic bytes so phone formats (HEIC) and ones browsers leave blank still
-    work. Returns None if it doesn't look like an image at all."""
-    declared = (declared or "").split(";")[0].strip().lower()
-    if declared.startswith("image/"):
-        return declared
-    head = data[:16]
-    if head[:3] == b"\xff\xd8\xff":
-        return "image/jpeg"
-    if head[:8] == b"\x89PNG\r\n\x1a\n":
-        return "image/png"
-    if head[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    if head[:2] == b"BM":
-        return "image/bmp"
-    if head[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if head[:4] in (b"II*\x00", b"MM\x00*"):
-        return "image/tiff"
-    if head[4:8] == b"ftyp":
-        brand = data[8:12]
-        if brand in (b"heic", b"heix", b"mif1", b"msf1", b"heim", b"heis"):
-            return "image/heic"
-        if brand in (b"avif", b"avis"):
-            return "image/avif"
-    if head[:5] == b"<?xml" or head[:4] == b"<svg":
-        return "image/svg+xml"
-    return None
 
 
 def _valid_date(s: str) -> str:
@@ -143,15 +115,27 @@ class Calendar(BaseAttachment):
         await self.db.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {img} (
-                id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                entry_id INTEGER NOT NULL,
-                hash     TEXT NOT NULL,
-                mime     TEXT NOT NULL,
-                ord      INTEGER NOT NULL DEFAULT 0,
-                created  REAL NOT NULL
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id     INTEGER NOT NULL,
+                hash         TEXT NOT NULL,
+                mime         TEXT NOT NULL,
+                ord          INTEGER NOT NULL DEFAULT 0,
+                created      REAL NOT NULL,
+                -- E2E encryption material (NULL on legacy plaintext rows). The blob
+                -- is ciphertext; key_wrapped is the per-image data key sealed under
+                -- the master key, header is the secretstream header (not secret).
+                key_wrapped  TEXT,
+                nonce_wrapped TEXT,
+                header       TEXT
             )
             """
         )
+        # Migrate older plaintext schemas: add the encryption columns if missing.
+        cols = await self.db.fetch_all(f"PRAGMA table_info({img})")
+        have = {c["name"] for c in cols}
+        for col in ("key_wrapped", "nonce_wrapped", "header"):
+            if col not in have:
+                await self.db.execute(f"ALTER TABLE {img} ADD COLUMN {col} TEXT")
         await self.db.execute(
             f"CREATE INDEX IF NOT EXISTS {img}_entry ON {img} (entry_id, ord)"
         )
@@ -176,11 +160,14 @@ class Calendar(BaseAttachment):
     async def _images_for(self, entry_id: int) -> list[dict[str, Any]]:
         img = self.db.table("images")
         rows = await self.db.fetch_all(
-            f"SELECT id, hash, mime, ord FROM {img} WHERE entry_id = ? ORDER BY ord, id",
+            f"SELECT id, hash, mime, ord, key_wrapped, nonce_wrapped, header "
+            f"FROM {img} WHERE entry_id = ? ORDER BY ord, id",
             (entry_id,),
         )
         for row in rows:
             row["url"] = f"image/{row['hash']}"
+            # `enc` tells the client whether to decrypt; legacy rows are plaintext.
+            row["enc"] = bool(row.get("key_wrapped"))
         return rows
 
     async def _entry_api(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -373,18 +360,30 @@ class Calendar(BaseAttachment):
         # --- images ---------------------------------------------------------
 
         @r.post("/entries/{entry_id}/images", status_code=201)
-        async def add_image(entry_id: int, file: UploadFile = ...) -> dict[str, Any]:  # noqa: B008
+        async def add_image(  # noqa: B008
+            entry_id: int,
+            file: UploadFile = ...,
+            mime: str = Query(...),
+            key_wrapped: str = Query(...),
+            nonce_wrapped: str = Query(...),
+            header: str = Query(...),
+        ) -> dict[str, Any]:
+            """Store an end-to-end-encrypted image. ``file`` is opaque *ciphertext*
+            (the client encrypted it with a fresh data key); ``key_wrapped`` /
+            ``nonce_wrapped`` seal that data key under the master key, ``header`` is
+            the secretstream header, ``mime`` is the (plaintext) declared type. The
+            blob is content-addressed by the SHA-256 of the ciphertext, verified
+            here — the only crypto the Pi does."""
             await _row(entry_id)
             data = await file.read()
             if not data:
                 raise HTTPException(400, "empty file")
             if len(data) > _MAX_IMAGE:
                 raise HTTPException(413, "image too large")
-            # Accept any image format: trust an image/* type, else sniff the bytes.
-            mime = _sniff_image_mime(data, file.content_type or "")
-            if mime is None:
-                raise HTTPException(415, "file does not look like an image")
-            h = _hash_bytes(data)
+            mime = (mime or "").split(";")[0].strip().lower()
+            if not mime.startswith("image/"):
+                raise HTTPException(415, "expected an image mime type")
+            h = _hash_bytes(data)  # hash of the ciphertext = storage key
             path = self._blob_path(h)
             if not path.is_file():
                 tmp = path.with_suffix(".tmp")
@@ -396,13 +395,23 @@ class Calendar(BaseAttachment):
             )
             ord_ = int((nxt or {}).get("n", 0))
             img_id = await self.db.execute_insert(
-                f"INSERT INTO {img} (entry_id, hash, mime, ord, created) "
-                f"VALUES (?, ?, ?, ?, ?)",
-                (entry_id, h, mime, ord_, time.time()),
+                f"INSERT INTO {img} (entry_id, hash, mime, ord, created, "
+                f"key_wrapped, nonce_wrapped, header) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (entry_id, h, mime, ord_, time.time(), key_wrapped, nonce_wrapped, header),
             )
             row = await _row(entry_id)
             self.events.publish("calendar.changed", {"date": row["date"]})
-            return {"id": img_id, "hash": h, "mime": mime, "ord": ord_, "url": f"image/{h}"}
+            return {
+                "id": img_id,
+                "hash": h,
+                "mime": mime,
+                "ord": ord_,
+                "url": f"image/{h}",
+                "enc": True,
+                "key_wrapped": key_wrapped,
+                "nonce_wrapped": nonce_wrapped,
+                "header": header,
+            }
 
         @r.delete("/images/{image_id}", status_code=204)
         async def delete_image(image_id: int) -> None:
@@ -440,8 +449,12 @@ class Calendar(BaseAttachment):
             if not path.is_file():
                 raise HTTPException(404, "image not found")
             row = await self.db.fetch_one(
-                f"SELECT mime FROM {img} WHERE hash = ? LIMIT 1", (blob_hash,)
+                f"SELECT mime, key_wrapped FROM {img} WHERE hash = ? LIMIT 1", (blob_hash,)
             )
+            # Encrypted blobs are opaque ciphertext — serve octet-stream and let the
+            # client decrypt. Legacy plaintext rows keep their real mime.
+            if row and row.get("key_wrapped"):
+                return FileResponse(path, media_type="application/octet-stream")
             mime = (row or {}).get("mime", "application/octet-stream")
             return FileResponse(path, media_type=mime)
 

@@ -114,11 +114,14 @@
 <style>
 	.vibe {
 		position: relative;
-		min-height: 70dvh;
+		/* Fit the whole card within the viewport so nothing overflows / scrolls.
+		   100dvh minus a little breathing room for the app chrome around it. */
+		height: min(100dvh - var(--space-6), 920px);
+		max-height: 100dvh;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: var(--space-5) var(--space-3);
+		padding: clamp(var(--space-3), 3vh, var(--space-5)) var(--space-3);
 		overflow: hidden;
 		border-radius: var(--radius-lg);
 		/* Tint the whole panel with the image-derived accent, blended toward bg so
@@ -134,22 +137,33 @@
 		position: relative;
 		z-index: 1;
 		width: min(680px, 100%);
+		height: 100%;
+		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-4);
+		gap: clamp(var(--space-2), 2vh, var(--space-4));
 		align-items: center;
+		justify-content: center;
 	}
 	.card {
 		margin: 0;
 		width: 100%;
+		min-height: 0;
+		flex: 1 1 auto;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-4);
+		gap: clamp(var(--space-2), 2vh, var(--space-4));
 		align-items: center;
+		justify-content: center;
 	}
 	.frame {
 		position: relative;
 		width: 100%;
+		/* Flex to fill the space left after the quote + bar, capped so it keeps a
+		   pleasing shape; the image fills it (cover). Never forces overflow. */
+		flex: 1 1 auto;
+		min-height: 0;
+		max-height: 56vh;
 		aspect-ratio: 16 / 10;
 		border-radius: var(--radius-lg);
 		overflow: hidden;

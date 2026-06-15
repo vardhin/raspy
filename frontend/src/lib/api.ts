@@ -79,7 +79,13 @@ async function tryRefresh(): Promise<boolean> {
  *  the vault layer (so double-wrapping is wasted) and need to stream, which the
  *  body-buffering channel middleware would break. */
 function bypassChannel(url: string): boolean {
-	return url.includes('/api/channel/') || url.includes('/api/att/vault/');
+	return (
+		url.includes('/api/channel/') ||
+		url.includes('/api/att/vault/') ||
+		// Calendar photo blobs are E2E-encrypted ciphertext that streams — same as
+		// the vault, no point double-wrapping them through the channel.
+		url.includes('/api/att/calendar/image/')
+	);
 }
 
 async function rawFetch(url: string, init?: RequestInit): Promise<Response> {

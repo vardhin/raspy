@@ -114,46 +114,54 @@ def test_entry_crud_and_range(cal_client: TestClient):
     assert cal_client.get(CAL + f"/entries/{entry['id']}").status_code == 404
 
 
+# Encryption material the client sends alongside the ciphertext blob. The Pi
+# stores it opaquely; the values are arbitrary base64 strings as far as it cares.
+_ENC_PARAMS = {
+    "mime": "image/png",
+    "key_wrapped": "a2V5",
+    "nonce_wrapped": "bm9uY2U",
+    "header": "aGVhZGVy",
+}
+
+
 def test_image_upload_and_serve(cal_client: TestClient):
     date = dt.date.today().isoformat()
     entry = cal_client.post(CAL + "/entries", json={"date": date, "title": "Pic"}).json()
 
+    # The browser uploads opaque CIPHERTEXT plus the wrapped data key + header. The
+    # blob is content-addressed by the SHA-256 of the ciphertext.
+    ciphertext = b"\x00\x01\x02opaque-ciphertext-bytes"
     up = cal_client.post(
         CAL + f"/entries/{entry['id']}/images",
-        files={"file": ("p.png", io.BytesIO(_png_bytes()), "image/png")},
+        params=_ENC_PARAMS,
+        files={"file": ("blob.bin", io.BytesIO(ciphertext), "application/octet-stream")},
     )
     assert up.status_code == 201, up.text
     img = up.json()
     assert img["mime"] == "image/png"
+    assert img["enc"] is True
+    assert img["key_wrapped"] == "a2V5"
 
-    # The entry now reports the image; the blob streams back.
+    # The entry reports the image (with its encryption material); the opaque blob
+    # streams back as octet-stream for the client to decrypt.
     fetched = cal_client.get(CAL + f"/entries/{entry['id']}").json()
     assert len(fetched["images"]) == 1
-    h = fetched["images"][0]["hash"]
+    row = fetched["images"][0]
+    assert row["enc"] is True
+    assert row["header"] == "aGVhZGVy"
+    h = row["hash"]
     blob = cal_client.get(CAL + f"/image/{h}")
     assert blob.status_code == 200
-    assert blob.headers["content-type"] == "image/png"
+    assert blob.headers["content-type"] == "application/octet-stream"
+    assert blob.content == ciphertext
 
-    # Rejects a non-image.
+    # Rejects a non-image declared mime.
     bad = cal_client.post(
         CAL + f"/entries/{entry['id']}/images",
-        files={"file": ("x.txt", io.BytesIO(b"hello there, not an image"), "text/plain")},
+        params={**_ENC_PARAMS, "mime": "text/plain"},
+        files={"file": ("x.bin", io.BytesIO(b"ciphertext"), "application/octet-stream")},
     )
     assert bad.status_code == 415
-
-
-def test_image_format_sniffed_when_type_missing(cal_client: TestClient):
-    """When the browser sends no/garbage content-type, the format is recovered
-    from the magic bytes so any image format still uploads."""
-    date = dt.date.today().isoformat()
-    entry = cal_client.post(CAL + "/entries", json={"date": date}).json()
-    gif = b"GIF89a" + b"\x01\x00\x01\x00\x00\x00\x00;"  # minimal GIF header
-    up = cal_client.post(
-        CAL + f"/entries/{entry['id']}/images",
-        files={"file": ("mystery", io.BytesIO(gif), "application/octet-stream")},
-    )
-    assert up.status_code == 201, up.text
-    assert up.json()["mime"] == "image/gif"
 
 
 def test_due_reminder_fires_notification(cal_client: TestClient):
@@ -235,16 +243,19 @@ def test_image_upload_over_sealed_channel(cal_client: TestClient):
     entry_id = json.loads(body)["id"]
 
     # Build a multipart body with an explicit boundary, exactly like attUpload.
+    # The payload is opaque ciphertext; the encryption material rides as query
+    # params (the client computes them before sealing the body).
     boundary = "----raspytestboundary"
-    png = _png_bytes()
+    ciphertext = b"\x00sealed-opaque-ciphertext"
     multipart = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="p.png"\r\n'
-        f"Content-Type: image/png\r\n\r\n"
-    ).encode() + png + f"\r\n--{boundary}--\r\n".encode()
+        f'Content-Disposition: form-data; name="file"; filename="blob.bin"\r\n'
+        f"Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + ciphertext + f"\r\n--{boundary}--\r\n".encode()
 
+    qs = "mime=image%2Fpng&key_wrapped=a2V5&nonce_wrapped=bm9uY2U&header=aGVhZGVy"
     status, body = c.post(
-        f"/api/att/calendar/entries/{entry_id}/images",
+        f"/api/att/calendar/entries/{entry_id}/images?{qs}",
         multipart,
         content_type=f"multipart/form-data; boundary={boundary}",
     )
