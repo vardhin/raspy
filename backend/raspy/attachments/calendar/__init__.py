@@ -38,9 +38,39 @@ from .._dailyvibe import DailyVibeStore
 log = logging.getLogger("raspy.calendar")
 
 _MAX_IMAGE = 25 * 1024 * 1024  # 25 MiB per photo
-_ALLOWED_IMAGE = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"}
 _MAX_RANGE_DAYS = 400  # guard the range endpoint
 _SCHED_IDLE_S = 60.0  # how long the reminder loop sleeps when nothing is due
+
+
+def _sniff_image_mime(data: bytes, declared: str) -> str | None:
+    """Best-effort image type. Trust a declared ``image/*`` type; otherwise sniff
+    the magic bytes so phone formats (HEIC) and ones browsers leave blank still
+    work. Returns None if it doesn't look like an image at all."""
+    declared = (declared or "").split(";")[0].strip().lower()
+    if declared.startswith("image/"):
+        return declared
+    head = data[:16]
+    if head[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if head[:2] == b"BM":
+        return "image/bmp"
+    if head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] in (b"II*\x00", b"MM\x00*"):
+        return "image/tiff"
+    if head[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"heic", b"heix", b"mif1", b"msf1", b"heim", b"heis"):
+            return "image/heic"
+        if brand in (b"avif", b"avis"):
+            return "image/avif"
+    if head[:5] == b"<?xml" or head[:4] == b"<svg":
+        return "image/svg+xml"
+    return None
 
 
 def _valid_date(s: str) -> str:
@@ -343,16 +373,17 @@ class Calendar(BaseAttachment):
         # --- images ---------------------------------------------------------
 
         @r.post("/entries/{entry_id}/images", status_code=201)
-        async def add_image(entry_id: int, file: UploadFile) -> dict[str, Any]:
+        async def add_image(entry_id: int, file: UploadFile = ...) -> dict[str, Any]:  # noqa: B008
             await _row(entry_id)
-            mime = (file.content_type or "").split(";")[0].strip().lower()
-            if mime not in _ALLOWED_IMAGE:
-                raise HTTPException(415, f"unsupported image type: {mime or 'unknown'}")
             data = await file.read()
             if not data:
                 raise HTTPException(400, "empty file")
             if len(data) > _MAX_IMAGE:
                 raise HTTPException(413, "image too large")
+            # Accept any image format: trust an image/* type, else sniff the bytes.
+            mime = _sniff_image_mime(data, file.content_type or "")
+            if mime is None:
+                raise HTTPException(415, "file does not look like an image")
             h = _hash_bytes(data)
             path = self._blob_path(h)
             if not path.is_file():

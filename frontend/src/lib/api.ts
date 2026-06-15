@@ -261,18 +261,35 @@ export function attDeleteQuery(
 	return request<void>(withQuery(attUrl(attachmentId, path), params), { method: 'DELETE' });
 }
 
-/** Upload a single file via multipart/form-data to an attachment endpoint. */
+/** Upload a single file via multipart/form-data to an attachment endpoint.
+ *
+ *  We build the multipart body ourselves with an explicit boundary and set the
+ *  content-type, rather than handing a `FormData` to fetch. Reason: when the
+ *  Layer-1 channel is active it seals the body and restores the content-type from
+ *  the header we pass — but a browser-built `FormData` only attaches its boundary
+ *  to the request content-type lazily, which the channel never sees, so the server
+ *  would restore `application/json` and fail to parse the form (HTTP 422). An
+ *  explicit boundary makes the content-type survive sealing. */
 export async function attUpload(
 	attachmentId: string,
 	path: string,
 	params: Record<string, string>,
 	file: File
 ): Promise<unknown> {
-	const fd = new FormData();
-	fd.append('file', file, file.name);
+	const boundary = `----raspy${crypto.randomUUID().replace(/-/g, '')}`;
+	const enc = new TextEncoder();
+	const name = file.name || 'upload.bin';
+	const head = enc.encode(
+		`--${boundary}\r\n` +
+			`Content-Disposition: form-data; name="file"; filename="${name.replace(/"/g, '')}"\r\n` +
+			`Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`
+	);
+	const tail = enc.encode(`\r\n--${boundary}--\r\n`);
+	const body = new Blob([head, await file.arrayBuffer(), tail]);
 	return request<unknown>(withQuery(attUrl(attachmentId, path), params), {
 		method: 'POST',
-		body: fd
+		body,
+		headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }
 	});
 }
 

@@ -219,6 +219,27 @@
 	let uploadBusy = $state(false);
 	let fileInput = $state<HTMLInputElement>();
 
+	// Object URLs for the pending (not-yet-uploaded) photos, recreated whenever the
+	// pending set changes and revoked when replaced so we don't leak blobs.
+	let pendingUrls = $state<string[]>([]);
+	$effect(() => {
+		const urls = pendingFiles.map((f) => URL.createObjectURL(f));
+		pendingUrls = urls;
+		return () => urls.forEach((u) => URL.revokeObjectURL(u));
+	});
+
+	// What the polaroid preview shows: already-saved photos (when editing) followed
+	// by the pending ones, then the editor's title/description as the caption.
+	let previewImages = $derived([
+		...(editing?.images
+			.slice()
+			.sort((a, b) => a.ord - b.ord)
+			.map((im) => ({ src: attResourceUrl(ID, im.url, {}), alt: '' })) ?? []),
+		...pendingUrls.map((src) => ({ src, alt: '' }))
+	]);
+	let previewIdx = $state(0);
+	let previewWeekday = $derived((new Date(formDate + 'T00:00:00').getDay() + 6) % 7);
+
 	// 24h → "9:00 AM" style echo.
 	function hour12(h: number): string {
 		const ampm = h < 12 ? 'AM' : 'PM';
@@ -533,6 +554,35 @@
 	onclose={() => (editorOpen = false)}
 >
 	<Stack gap={3}>
+		<!-- Live preview: how the polaroid card will look once saved. -->
+		<div class="preview-wrap">
+			<div
+				class="polaroid preview"
+				style:--day-tint={tint(previewWeekday)}
+				style:--tilt="0deg"
+			>
+				<div class="window">
+					{#if previewImages.length > 0}
+						<Carousel items={previewImages} bind:index={previewIdx} rounded={false} />
+					{:else}
+						<div class="no-photo"><Icon name="image" size={26} /></div>
+					{/if}
+				</div>
+				<div class="mat" role="presentation">
+					<span class="date-chip">
+						<span class="dow">{WEEKDAYS[previewWeekday]}</span>
+						<span class="dnum">{Number(formDate.slice(8))}</span>
+					</span>
+					<span class="caption" class:muted={!formTitle && !formDesc}>
+						{formTitle || oneLine(formDesc) || 'add a memory'}
+					</span>
+					<span class="badges">
+						{#if formRemindOn}<span class="remind"><Icon name="bell" size={11} /></span>{/if}
+					</span>
+				</div>
+			</div>
+		</div>
+
 		<Field type="date" label="Date" bind:value={formDate} />
 		<Field label="Title" placeholder="A title for this memory…" bind:value={formTitle} />
 		<Field
@@ -593,7 +643,7 @@
 		<input
 			bind:this={fileInput}
 			type="file"
-			accept="image/*"
+			accept="image/*,.heic,.heif,.avif,.bmp,.tif,.tiff"
 			multiple
 			style="display:none"
 			onchange={onPickFiles}
@@ -682,6 +732,18 @@
 	.polaroid.today {
 		outline: 2px solid var(--accent);
 		outline-offset: 2px;
+	}
+	/* Editor preview: a centered, static polaroid (no tilt / hover-lift). */
+	.preview-wrap {
+		display: flex;
+		justify-content: center;
+		padding: var(--space-2) 0;
+	}
+	.polaroid.preview {
+		width: min(220px, 70%);
+	}
+	.polaroid.preview:hover {
+		transform: none;
 	}
 
 	.window {

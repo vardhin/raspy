@@ -137,9 +137,23 @@ def test_image_upload_and_serve(cal_client: TestClient):
     # Rejects a non-image.
     bad = cal_client.post(
         CAL + f"/entries/{entry['id']}/images",
-        files={"file": ("x.txt", io.BytesIO(b"hello"), "text/plain")},
+        files={"file": ("x.txt", io.BytesIO(b"hello there, not an image"), "text/plain")},
     )
     assert bad.status_code == 415
+
+
+def test_image_format_sniffed_when_type_missing(cal_client: TestClient):
+    """When the browser sends no/garbage content-type, the format is recovered
+    from the magic bytes so any image format still uploads."""
+    date = dt.date.today().isoformat()
+    entry = cal_client.post(CAL + "/entries", json={"date": date}).json()
+    gif = b"GIF89a" + b"\x01\x00\x01\x00\x00\x00\x00;"  # minimal GIF header
+    up = cal_client.post(
+        CAL + f"/entries/{entry['id']}/images",
+        files={"file": ("mystery", io.BytesIO(gif), "application/octet-stream")},
+    )
+    assert up.status_code == 201, up.text
+    assert up.json()["mime"] == "image/gif"
 
 
 def test_due_reminder_fires_notification(cal_client: TestClient):
@@ -201,6 +215,41 @@ def test_vibe_refresh_changes_image(tmp_path: Path, monkeypatch):
 
         assert second["rev"] > first["rev"]
         assert img1 != img2
+
+
+def test_image_upload_over_sealed_channel(cal_client: TestClient):
+    """The real browser path: a multipart upload SEALED through the Layer-1
+    channel. The channel restores content-type from the x-channel-ct header, so
+    the client must send an explicit multipart boundary or the form won't parse
+    (this was the HTTP 422 bug). Mirrors frontend attUpload()."""
+    from test_channel import _Client
+
+    c = _Client(cal_client)
+    c.handshake()
+
+    # Create an entry over the channel.
+    import json
+
+    status, body = c.post("/api/att/calendar/entries", json.dumps({"date": "2026-06-15"}).encode())
+    assert status == 201, (status, body)
+    entry_id = json.loads(body)["id"]
+
+    # Build a multipart body with an explicit boundary, exactly like attUpload.
+    boundary = "----raspytestboundary"
+    png = _png_bytes()
+    multipart = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="p.png"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + png + f"\r\n--{boundary}--\r\n".encode()
+
+    status, body = c.post(
+        f"/api/att/calendar/entries/{entry_id}/images",
+        multipart,
+        content_type=f"multipart/form-data; boundary={boundary}",
+    )
+    assert status == 201, (status, body)
+    assert json.loads(body)["mime"] == "image/png"
 
 
 def test_vibe_today(cal_client: TestClient):
