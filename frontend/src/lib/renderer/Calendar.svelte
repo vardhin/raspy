@@ -58,7 +58,12 @@
 	let anchor = $state(todayISO()); // a date inside the current window
 	let customFrom = $state(todayISO());
 	let customTo = $state(addDays(todayISO(), 13));
-	let zoom = $state(3); // 1 (tiny, many cols) … 5 (large, few cols)
+	// Zoom slider value 1..6 → column count 7..2 (each step = ±1 column). Slider
+	// left (1) = zoomed out, 7 columns; right (6) = zoomed in, 2 columns.
+	const MIN_ZOOM = 1;
+	const MAX_ZOOM = 6;
+	let zoom = $state(3);
+	let cols = $derived(8 - zoom); // 1→7 cols, 6→2 cols
 
 	let days = $state<Day[]>([]);
 	let loading = $state(true);
@@ -110,14 +115,10 @@
 		return `${fmt(f)} – ${fmt(t)}`;
 	});
 
-	// Zoom → grid columns. At the lowest zoom (1) we force a dense 7-wide row;
-	// higher zooms use auto-fill with a growing min width so cards get bigger and
-	// columns reduce as you zoom in. Persisted across sessions (see onMount).
-	let gridCols = $derived(
-		zoom <= 1
-			? 'repeat(7, minmax(0, 1fr))'
-			: `repeat(auto-fill, minmax(${110 + (zoom - 1) * 70}px, 1fr))`
-	);
+	// The slider directly sets the column count: each step changes it by exactly
+	// one column. minmax(0,1fr) lets columns shrink so the row never overflows.
+	// Persisted across sessions (see onMount).
+	let gridCols = $derived(`repeat(${cols}, minmax(0, 1fr))`);
 
 	$effect(() => {
 		void kvSet(ZOOM_KEY, zoom);
@@ -361,7 +362,7 @@
 	onMount(() => {
 		// Restore the last zoom level.
 		void kvGet<number>(ZOOM_KEY).then((z) => {
-			if (typeof z === 'number' && z >= 1 && z <= 5) zoom = z;
+			if (typeof z === 'number' && z >= MIN_ZOOM && z <= MAX_ZOOM) zoom = z;
 		});
 		offEvent = connection.onEvent((topic) => {
 			if (topic === 'calendar.changed') void load();
@@ -395,10 +396,11 @@
 					]}
 				/>
 				<div class="zoom">
-					<Slider bind:value={zoom} min={1} max={5} step={1} label="Zoom">
+					<Slider bind:value={zoom} min={MIN_ZOOM} max={MAX_ZOOM} step={1} label="Zoom">
 						{#snippet lead()}<Icon name="zoom-out" size={16} />{/snippet}
 						{#snippet trail()}<Icon name="zoom-in" size={16} />{/snippet}
 					</Slider>
+					<span class="cols">{cols} cols</span>
 				</div>
 			</div>
 		</div>
@@ -682,7 +684,18 @@
 		flex-wrap: wrap;
 	}
 	.zoom {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.zoom :global(.slider) {
 		width: 140px;
+	}
+	.zoom .cols {
+		color: var(--muted);
+		font-size: 0.8rem;
+		white-space: nowrap;
+		flex: none;
 	}
 	.custom {
 		display: flex;
