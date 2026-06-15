@@ -1,7 +1,17 @@
 <script lang="ts">
 	// One form primitive covering text/number/textarea/select/checkbox. Label +
 	// control, all token-styled. `value` is bindable.
-	type FieldType = 'text' | 'number' | 'password' | 'email' | 'textarea' | 'select' | 'checkbox';
+	type FieldType =
+		| 'text'
+		| 'number'
+		| 'password'
+		| 'email'
+		| 'date'
+		| 'datetime-local'
+		| 'time'
+		| 'textarea'
+		| 'select'
+		| 'checkbox';
 
 	let {
 		type = 'text',

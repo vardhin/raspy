@@ -175,6 +175,34 @@ def mail_client(*, title: str | None = None) -> UINode:
     return _node("mail_client", title=title)
 
 
+def vibe(*, title: str | None = None) -> UINode:
+    """The "Vibe of the Day" UI — one magical daily image + quote.
+
+    The backend fetches a fresh image + quote per day from keyless public providers
+    and caches them to disk (offline-resilient, stable per day), plus a random
+    Google display font cached locally. The shell component reads
+    ``GET /api/att/vibe/today`` (``{image_url, accent, quote, author, font}``),
+    renders a sparkly star field tinted by ``accent``, loads ``font`` via
+    ``/api/att/vibe/font.css``, and shows the quote. A "Fetch now" button POSTs
+    ``/api/att/vibe/refresh``. One composite Tier-1 node, no shipped client code.
+    """
+    return _node("vibe", title=title)
+
+
+def calendar(*, title: str | None = None) -> UINode:
+    """A continuous-timeline calendar: memory journal + planner in one grid.
+
+    Every day in the viewed range is a card; days with entries show photos + text,
+    empty days show that day's shared "vibe" placeholder (image + quote). The shell
+    component reads ``GET /api/att/calendar/range?from=&to=``, supports a zoom
+    slider (cards-per-row), a week/month/custom range switch, per-day weekday tint,
+    an inline photo carousel, multiple entries per day, and future entries with a
+    durable ``remind_at`` notification. One composite Tier-1 node, no shipped client
+    code (Flutter-portable: pure data + wiring).
+    """
+    return _node("calendar", title=title)
+
+
 def vault(*, title: str | None = None) -> UINode:
     """The zero-knowledge vault UI (Layer 2). The backend is a *dumb* store: it
     holds opaque encrypted blobs (content-addressed by SHA-256) and one opaque

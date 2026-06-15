@@ -10,6 +10,8 @@
 	import MailClient from './MailClient.svelte';
 	import SystemStats from './SystemStats.svelte';
 	import Vault from './Vault.svelte';
+	import Vibe from './Vibe.svelte';
+	import Calendar from './Calendar.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -155,6 +157,10 @@
 	<SystemStats {node} />
 {:else if node.type === 'vault'}
 	<Vault />
+{:else if node.type === 'vibe'}
+	<Vibe />
+{:else if node.type === 'calendar'}
+	<Calendar />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}
