@@ -6,6 +6,7 @@
 	// item shape with Carousel so the same `items`/`index` flow straight through.
 	import { onMount } from 'svelte';
 	import Icon from './Icon.svelte';
+	import { portal } from '$lib/actions/portal';
 
 	type Item = {
 		src: string;
@@ -94,6 +95,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
+	use:portal
 	class="fs"
 	class:lights-off={lightsOff}
 	role="dialog"
