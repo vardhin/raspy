@@ -36,7 +36,7 @@ class Principal:
         return self.role == "admin"
 
 
-def get_auth(request: Request) -> AuthService:
+async def get_auth(request: Request) -> AuthService:
     svc = getattr(request.app.state, "auth", None)
     if svc is None:
         raise HTTPException(503, "auth unavailable")
@@ -99,21 +99,27 @@ def principal_from_request(request: Request) -> Principal | None:
     )
 
 
-def require_auth(request: Request, svc: AuthService = Depends(get_auth)) -> Principal:
+async def require_auth(
+    request: Request, svc: AuthService = Depends(get_auth)
+) -> Principal:
     principal = principal_from_request(request)
     if principal is None:
         raise HTTPException(401, "authentication required")
     return principal
 
 
-def optional_auth(request: Request) -> Principal | None:
+async def optional_auth(request: Request) -> Principal | None:
     return principal_from_request(request)
 
 
-def require_admin(request: Request, svc: AuthService = Depends(get_auth)) -> Principal:
+async def require_admin(
+    request: Request, svc: AuthService = Depends(get_auth)
+) -> Principal:
     """Like :func:`require_auth` but also 403s non-admins. Stateless: the role is
     read from the (signed) access-token claims via the Principal."""
-    principal = require_auth(request, svc)
+    principal = principal_from_request(request)
+    if principal is None:
+        raise HTTPException(401, "authentication required")
     if not principal.is_admin:
         raise HTTPException(403, "admin only")
     return principal

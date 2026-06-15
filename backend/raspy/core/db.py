@@ -5,14 +5,13 @@ attachment gets a :class:`ScopedDB` whose ``table()`` helper prefixes table name
 with the attachment id, so attachments can't collide or read each other's tables
 by accident.
 
-sqlite3 is synchronous; we run queries in a thread via ``asyncio.to_thread`` so
-they don't block the event loop. A single shared connection with
-``check_same_thread=False`` plus a lock keeps it simple and correct for this scale.
+sqlite3 is synchronous; a single shared connection plus a lock keeps it simple and
+correct for this scale. The public methods are async to fit FastAPI handlers, but
+they execute the small SQLite operation immediately under the lock.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
 import sqlite3
 import threading
@@ -71,7 +70,7 @@ class Database:
     # --- async wrappers ------------------------------------------------------
 
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
-        await asyncio.to_thread(self._execute, sql, params)
+        self._execute(sql, params)
 
     async def fetch_all(
         self, sql: str, params: Iterable[Any] = ()
@@ -80,7 +79,7 @@ class Database:
             cur = self._execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
 
-        return await asyncio.to_thread(run)
+        return run()
 
     async def fetch_one(
         self, sql: str, params: Iterable[Any] = ()
@@ -90,7 +89,7 @@ class Database:
             row = cur.fetchone()
             return dict(row) if row is not None else None
 
-        return await asyncio.to_thread(run)
+        return run()
 
     async def execute_insert(self, sql: str, params: Iterable[Any] = ()) -> int:
         """Execute an INSERT and return the new rowid."""
@@ -99,7 +98,7 @@ class Database:
             cur = self._execute(sql, params)
             return int(cur.lastrowid or 0)
 
-        return await asyncio.to_thread(run)
+        return run()
 
     async def execute_insert_changed(
         self, sql: str, params: Iterable[Any] = ()
@@ -116,7 +115,7 @@ class Database:
             cur = self._execute(sql, params)
             return int(cur.lastrowid or 0), int(cur.rowcount or 0)
 
-        return await asyncio.to_thread(run)
+        return run()
 
 
 class ScopedDB:

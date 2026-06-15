@@ -49,7 +49,7 @@ def cal_client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         _dailyvibe, "_http_get", lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
     )
-    from conftest import _seed_account
+    from conftest import _seed_account, _TEST_AUTH_KEY
     from raspy.config import AuthSettings
 
     settings = Settings(
@@ -59,10 +59,7 @@ def cal_client(tmp_path: Path, monkeypatch):
     _seed_account(settings)
     app = create_app(settings)
     with TestClient(app) as c:
-        from raspy.core.auth import kdf
-
-        auth_key = kdf.derive_auth_key("test-password", "PrXc0GEAlOveYCpyIegc0Q")
-        r = c.post("/api/auth/login", json={"username": "tester", "auth_key": auth_key})
+        r = c.post("/api/auth/login", json={"username": "tester", "auth_key": _TEST_AUTH_KEY})
         assert r.status_code == 200, r.text
         c.headers.update({"X-CSRF-Token": r.json()["csrf_token"]})
         yield c
@@ -199,7 +196,7 @@ def test_vibe_refresh_changes_image(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(_dailyvibe, "_http_get", fake_get)
 
-    from conftest import _seed_account
+    from conftest import _seed_account, _TEST_AUTH_KEY
     from raspy.config import AuthSettings
 
     settings = Settings(
@@ -209,10 +206,7 @@ def test_vibe_refresh_changes_image(tmp_path: Path, monkeypatch):
     _seed_account(settings)
     app = create_app(settings)
     with TestClient(app) as c:
-        from raspy.core.auth import kdf
-
-        auth_key = kdf.derive_auth_key("test-password", "PrXc0GEAlOveYCpyIegc0Q")
-        r = c.post("/api/auth/login", json={"username": "tester", "auth_key": auth_key})
+        r = c.post("/api/auth/login", json={"username": "tester", "auth_key": _TEST_AUTH_KEY})
         c.headers.update({"X-CSRF-Token": r.json()["csrf_token"]})
 
         first = c.get(VIBE + "/today").json()
