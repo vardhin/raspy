@@ -60,5 +60,11 @@ The link port is the spine's configured `settings.port`.
   never echoed back.
 - Bringing a tunnel up / changing Tailscale is a mutating admin action behind the
   normal auth + CSRF gate.
-- `tailscale up` may need root; if it fails we surface the real error rather than
-  silently escalating.
+- A Tailscale action that needs root (`up`/`down`/`logout`/`set --ssh`) never
+  escalates silently. The endpoint first runs the command unprivileged; if it
+  fails for lack of root it returns **428** with `detail: needs-root`. The UI then
+  pops a sudo-password prompt (`SudoPrompt`) and retries with the password in the
+  request body. The password is sent **only over the encrypted channel**
+  (core/channel), handed to `sudo -S -k -p ''` on **stdin** (never in argv, which
+  is world-readable via `/proc`), used once, and never stored or logged. A wrong
+  password returns **403**; the prompt stays open to re-try.

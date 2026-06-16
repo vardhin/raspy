@@ -4,8 +4,8 @@
 	// children). Shows LAN/private IPs, public IP, the Tailscale address + MagicDNS
 	// link, and the Cloudflare tunnel — each as a copyable http://<addr>:<port> link.
 	import { onMount } from 'svelte';
-	import { attGet, attAction } from '$lib/api';
-	import { Badge, Button, Icon, Stack, Surface, Text } from '$lib/components';
+	import { attGet, attAction, type ApiError } from '$lib/api';
+	import { Badge, Button, Icon, Stack, Surface, SudoPrompt, Text } from '$lib/components';
 
 	interface LocalAddr {
 		ip: string;
@@ -55,6 +55,17 @@
 	let copied = $state<string | null>(null);
 	let cfTokenInput = $state('');
 
+	// sudo-password prompt state. When a privileged action returns the backend's
+	// `needs-root` signal (HTTP 428), we stash it here and re-run it with the
+	// password the user types. The password lives only inside SudoPrompt.
+	let sudo = $state<{
+		open: boolean;
+		busy: boolean;
+		error: string | null;
+		detail: string;
+		retry: ((password: string) => Promise<unknown>) | null;
+	}>({ open: false, busy: false, error: null, detail: '', retry: null });
+
 	onMount(() => void refresh());
 
 	async function refresh() {
@@ -79,6 +90,51 @@
 		}
 	}
 
+	/** Run a privileged tailscale action. `run(password)` calls the endpoint with
+	 *  the optional sudo password. On a 428 needs-root we open the prompt; the
+	 *  prompt's submit re-invokes `run` with the typed password. A 403 means the
+	 *  password was wrong — we keep the dialog open and show the error. */
+	async function privileged(key: string, detail: string, run: (password?: string) => Promise<unknown>) {
+		const attempt = async (password?: string) => {
+			try {
+				await run(password);
+				sudo.open = false;
+				sudo.retry = null;
+				await refresh();
+			} catch (e) {
+				const err = e as ApiError;
+				if (err.status === 428) {
+					// Needs root and we haven't supplied a password yet → prompt.
+					sudo = { open: true, busy: false, error: null, detail, retry: async (p) => attempt(p) };
+				} else if (err.status === 403 && sudo.open) {
+					sudo.busy = false;
+					sudo.error = err.detail ?? 'wrong sudo password';
+				} else {
+					sudo.open = false;
+					sudo.retry = null;
+					error = err.detail ?? err.message ?? 'action failed';
+				}
+			}
+		};
+		busy = key;
+		error = null;
+		try {
+			await attempt();
+		} finally {
+			busy = null;
+		}
+	}
+
+	function onSudoSubmit(password: string) {
+		sudo.busy = true;
+		sudo.error = null;
+		void sudo.retry?.(password);
+	}
+
+	function onSudoCancel() {
+		sudo = { open: false, busy: false, error: null, detail: '', retry: null };
+	}
+
 	async function copy(url: string) {
 		try {
 			await navigator.clipboard.writeText(url);
@@ -101,11 +157,23 @@
 		});
 	const cfUp = () => act('cf-up', () => attAction('connectivity', 'POST', 'cloudflare/up'));
 	const cfDown = () => act('cf-down', () => attAction('connectivity', 'POST', 'cloudflare/down'));
-	const tsUp = () => act('ts-up', () => attAction('connectivity', 'POST', 'tailscale/up'));
-	const tsDown = () => act('ts-down', () => attAction('connectivity', 'POST', 'tailscale/down'));
-	const tsLogout = () => act('ts-logout', () => attAction('connectivity', 'POST', 'tailscale/logout'));
+	// Tailscale mutations may need root; `privileged` prompts for sudo on a 428.
+	const tsUp = () =>
+		privileged('ts-up', 'tailscale up', (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/up', { sudo_password })
+		);
+	const tsDown = () =>
+		privileged('ts-down', 'tailscale down', (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/down', { sudo_password })
+		);
+	const tsLogout = () =>
+		privileged('ts-logout', 'tailscale logout', (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/logout', { sudo_password })
+		);
 	const tsSsh = (enable: boolean) =>
-		act('ts-ssh', () => attAction('connectivity', 'POST', 'tailscale/ssh', { enable }));
+		privileged('ts-ssh', `tailscale set --ssh${enable ? '' : '=false'}`, (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/ssh', { enable, sudo_password })
+		);
 </script>
 
 {#snippet linkRow(label: string, url: string)}
@@ -198,7 +266,7 @@
 							{status.tailscale.login_url ? 'Re-check login' : 'Log in / connect'}
 						</Button>
 					</div>
-					<Text role="muted">Tip: <code>tailscale up</code> may need root; if it fails, run it on the Pi.</Text>
+					<Text role="muted">Tip: <code>tailscale up</code> may need root — if it does, you'll be asked for your sudo password.</Text>
 				{/if}
 			</Stack>
 		</Surface>
@@ -276,6 +344,15 @@
 		{/if}
 	{/if}
 </Stack>
+
+<SudoPrompt
+	open={sudo.open}
+	detail={sudo.detail}
+	busy={sudo.busy}
+	error={sudo.error}
+	onsubmit={onSudoSubmit}
+	oncancel={onSudoCancel}
+/>
 
 <style>
 	.head {

@@ -25,6 +25,7 @@ export { default as SegmentedControl } from './SegmentedControl.svelte';
 export { default as StarField } from './StarField.svelte';
 export { default as PasswordLogin } from './PasswordLogin.svelte';
 export { default as PinUnlock } from './PinUnlock.svelte';
+export { default as SudoPrompt } from './SudoPrompt.svelte';
 export { default as AccountSetup } from './AccountSetup.svelte';
 export { default as LockGate } from './LockGate.svelte';
 export { default as UpdateBanner } from './UpdateBanner.svelte';

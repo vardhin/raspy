@@ -58,23 +58,69 @@ class CloudflareToken(BaseModel):
     token: str = Field(min_length=10, max_length=4096)
 
 
-class SshToggle(BaseModel):
+class SudoBody(BaseModel):
+    """Optional sudo password for a privileged action. Sent only over the
+    encrypted channel (see core/channel) and used transiently — never stored,
+    never logged, never placed in a command's argv."""
+
+    sudo_password: str | None = Field(default=None, max_length=1024)
+
+
+class SshToggle(SudoBody):
     enable: bool = True
 
 
-async def _run(cmd: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
-    """Run a command capturing output, off the event loop."""
+async def _run(
+    cmd: list[str], timeout: float = 30.0, stdin: bytes | None = None
+) -> tuple[int, str, str]:
+    """Run a command capturing output, off the event loop. Optional ``stdin`` is
+    fed once and the pipe closed (used to hand `sudo -S` a password without ever
+    putting it in argv, which is world-readable via /proc)."""
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, err = await asyncio.wait_for(proc.communicate(input=stdin), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         return 124, "", "timed out"
     return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+# Marker the UI keys off to know it should pop the sudo-password prompt and retry.
+_NEEDS_ROOT = "needs-root"
+
+# Substrings sudo / the tools print when escalation is required or the password
+# was wrong — used to translate a raw failure into a "needs root" signal.
+_ROOT_HINTS = ("access denied", "permission denied", "must be run as root",
+               "operation not permitted", "use 'sudo")
+_BADPW_HINTS = ("incorrect password", "sorry, try again", "authentication failure")
+
+
+def _looks_like_needs_root(text: str) -> bool:
+    t = text.lower()
+    return any(h in t for h in _ROOT_HINTS)
+
+
+async def _run_maybe_sudo(
+    cmd: list[str], timeout: float, sudo_password: str | None
+) -> tuple[int, str, str]:
+    """Run ``cmd``; if a sudo password is supplied, run it through
+    ``sudo -S -p '' -k`` and feed the password on stdin. ``-k`` invalidates any
+    cached credential first so a stale timestamp can't mask a wrong password."""
+    if sudo_password is None:
+        return await _run(cmd, timeout=timeout)
+    sudo = shutil.which("sudo")
+    if not sudo:
+        raise HTTPException(400, "sudo is not available on this machine")
+    return await _run(
+        [sudo, "-S", "-k", "-p", "", *cmd],
+        timeout=timeout,
+        stdin=(sudo_password + "\n").encode(),
+    )
 
 
 def _port() -> int:
@@ -262,16 +308,17 @@ class Connectivity(BaseAttachment):
         info["links"] = links
         return info
 
-    async def _tailscale_up(self) -> dict[str, Any]:
+    async def _tailscale_up(self, sudo_password: str | None = None) -> dict[str, Any]:
         """Bring Tailscale up. If the daemon needs an interactive login it prints a
         URL on stderr; we capture and surface it rather than block. Does NOT take an
-        auth key — the normal flow is a browser login."""
+        auth key — the normal flow is a browser login. If `up` itself needs root and
+        no password was given, signal needs-root so the UI can prompt and retry."""
         ts_bin = self._tailscale_bin()
         if not ts_bin:
             raise HTTPException(503, "tailscale is not installed on this machine")
         # --timeout keeps `up` from hanging waiting for auth; we just want the URL.
-        code, out, err = await _run(
-            [ts_bin, "up", "--timeout", "1s"], timeout=20
+        code, out, err = await _run_maybe_sudo(
+            [ts_bin, "up", "--timeout", "1s"], timeout=20, sudo_password=sudo_password
         )
         text = f"{out}\n{err}"
         m = re.search(r"https://login\.tailscale\.com/\S+", text)
@@ -279,8 +326,16 @@ class Connectivity(BaseAttachment):
             self._ts_login_url = m.group(0)
             return {"ok": True, "needs_login": True, "login_url": self._ts_login_url}
         if code != 0:
-            # Common: needs root. Surface the real reason for the UI to show.
-            raise HTTPException(400, (err or out or "tailscale up failed").strip()[:500])
+            detail = (err or out or "tailscale up failed").strip()
+            if sudo_password is None and _looks_like_needs_root(detail):
+                # 428 (not 401) so the client's auth-refresh path is untouched —
+                # this is "you must supply a precondition (the sudo password)".
+                raise HTTPException(428, _NEEDS_ROOT)
+            if sudo_password is not None and any(
+                h in detail.lower() for h in _BADPW_HINTS
+            ):
+                raise HTTPException(403, "wrong sudo password")
+            raise HTTPException(400, detail[:500])
         self._ts_login_url = None
         return {"ok": True, "needs_login": False}
 
@@ -368,40 +423,63 @@ class Connectivity(BaseAttachment):
             return {"ok": True, "running": False}
 
         @r.post("/tailscale/up")
-        async def ts_up(request: Request) -> dict[str, Any]:
+        async def ts_up(request: Request, body: SudoBody | None = None) -> dict[str, Any]:
             _require_admin(request)
-            return await self._tailscale_up()
+            return await self._tailscale_up((body or SudoBody()).sudo_password)
 
         @r.post("/tailscale/down")
-        async def ts_down(request: Request) -> dict[str, Any]:
+        async def ts_down(request: Request, body: SudoBody | None = None) -> dict[str, Any]:
             _require_admin(request)
-            return await self._ts_simple(["down"], "tailscale down failed")
+            return await self._ts_simple(
+                ["down"], "tailscale down failed", (body or SudoBody()).sudo_password
+            )
 
         @r.post("/tailscale/logout")
-        async def ts_logout(request: Request) -> dict[str, Any]:
+        async def ts_logout(request: Request, body: SudoBody | None = None) -> dict[str, Any]:
             """Fully log out (forgets the node key / account), not just 'down'."""
             _require_admin(request)
             self._ts_login_url = None
-            return await self._ts_simple(["logout"], "tailscale logout failed")
+            return await self._ts_simple(
+                ["logout"], "tailscale logout failed", (body or SudoBody()).sudo_password
+            )
 
         @r.post("/tailscale/ssh")
         async def ts_ssh(request: Request, body: SshToggle) -> dict[str, Any]:
             """Enable or disable Tailscale SSH on this node (tailscale set --ssh)."""
             _require_admin(request)
             flag = "--ssh" if body.enable else "--ssh=false"
-            return await self._ts_simple(["set", flag], "tailscale set --ssh failed")
+            return await self._ts_simple(
+                ["set", flag], "tailscale set --ssh failed", body.sudo_password
+            )
 
         return r
 
-    async def _ts_simple(self, args: list[str], errmsg: str) -> dict[str, Any]:
+    async def _ts_simple(
+        self, args: list[str], errmsg: str, sudo_password: str | None = None
+    ) -> dict[str, Any]:
         """Run a tailscale subcommand that has no special output handling.
-        Refuses cleanly when not installed; surfaces the real error otherwise."""
+        Refuses cleanly when not installed; surfaces the real error otherwise.
+
+        When the command fails because it needs root and no password was given,
+        return HTTP 401 with ``code: needs-root`` so the UI can prompt for the
+        sudo password and retry — rather than silently escalating (plan/56)."""
         ts_bin = self._tailscale_bin()
         if not ts_bin:
             raise HTTPException(503, "tailscale is not installed on this machine")
-        code, out, err = await _run([ts_bin, *args], timeout=30)
+        code, out, err = await _run_maybe_sudo(
+            [ts_bin, *args], timeout=30, sudo_password=sudo_password
+        )
         if code != 0:
-            raise HTTPException(400, (err or out or errmsg).strip()[:500])
+            detail = (err or out or errmsg).strip()
+            if sudo_password is None and _looks_like_needs_root(detail):
+                # 428 (not 401) so the client's auth-refresh path is untouched —
+                # this is "you must supply a precondition (the sudo password)".
+                raise HTTPException(428, _NEEDS_ROOT)
+            if sudo_password is not None and any(
+                h in detail.lower() for h in _BADPW_HINTS
+            ):
+                raise HTTPException(403, "wrong sudo password")
+            raise HTTPException(400, detail[:500])
         return {"ok": True}
 
     def ui(self) -> Any:

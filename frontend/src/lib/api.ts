@@ -37,6 +37,9 @@ export function attUrl(attachmentId: string, path: string): string {
 
 export interface ApiError extends Error {
 	status?: number;
+	/** The server's response body (FastAPI `detail`, or raw text) — lets callers
+	 *  react to a specific failure, e.g. the connectivity sudo-password flow. */
+	detail?: string;
 }
 
 /** Read the readable CSRF cookie to echo on mutating cookie-auth requests. */
@@ -194,6 +197,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 	if (!res.ok) {
 		const err: ApiError = new Error(`${init?.method ?? 'GET'} ${url} -> ${res.status}`);
 		err.status = res.status;
+		// Surface the body so callers can branch on the reason (e.g. needs-root).
+		// FastAPI errors are {"detail": "..."}; fall back to the raw text.
+		try {
+			const body = await res.text();
+			if (body) {
+				try {
+					err.detail = JSON.parse(body)?.detail ?? body;
+				} catch {
+					err.detail = body;
+				}
+			}
+		} catch {
+			/* body already consumed / unreadable — leave detail unset */
+		}
 		throw err;
 	}
 	if (res.status === 204) return undefined as T;

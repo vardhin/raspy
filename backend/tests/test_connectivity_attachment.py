@@ -71,6 +71,59 @@ def test_tailscale_actions_refuse_when_not_installed(client, monkeypatch):
     assert r.status_code == 503
 
 
+def test_logout_signals_needs_root_then_succeeds_with_sudo(client, monkeypatch):
+    """A privileged tailscale action that fails for lack of root returns 428
+    `needs-root` (so the UI can prompt), and succeeds when a sudo password is
+    supplied — without ever putting the password in argv."""
+    import raspy.attachments.connectivity as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    calls: list[tuple[list[str], bytes | None]] = []
+
+    async def fake_run(cmd, timeout=30.0, stdin=None):
+        calls.append((cmd, stdin))
+        # Plain (no sudo) attempt → access denied; sudo attempt → success.
+        if cmd[0].endswith("sudo"):
+            return 0, "", ""
+        return 1, "", "Access denied: logout access denied\nUse 'sudo tailscale logout'."
+
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    # No password → 428 needs-root.
+    r = client.post("/api/att/connectivity/tailscale/logout")
+    assert r.status_code == 428
+    assert r.json()["detail"] == "needs-root"
+
+    # With a password → runs via sudo -S and the password is fed on stdin only.
+    r = client.post("/api/att/connectivity/tailscale/logout", json={"sudo_password": "hunter2"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+
+    sudo_call = next(c for c in calls if c[0][0].endswith("sudo"))
+    cmd, stdin = sudo_call
+    assert cmd[:4] == [cmd[0], "-S", "-k", "-p"]  # sudo -S -k -p '' …
+    assert "hunter2" not in " ".join(cmd)  # never in argv
+    assert stdin == b"hunter2\n"  # only on stdin
+
+
+def test_wrong_sudo_password_returns_403(client, monkeypatch):
+    import raspy.attachments.connectivity as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    async def fake_run(cmd, timeout=30.0, stdin=None):
+        if cmd[0].endswith("sudo"):
+            return 1, "", "sudo: 1 incorrect password attempt"
+        return 1, "", "Access denied: use 'sudo'"
+
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    r = client.post("/api/att/connectivity/tailscale/down", json={"sudo_password": "nope"})
+    assert r.status_code == 403
+    assert "password" in r.json()["detail"].lower()
+
+
 def test_cloudflare_up_requires_binary(client, monkeypatch):
     import raspy.attachments.connectivity as mod
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
