@@ -153,7 +153,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app_id = path.removeprefix("/api/att/").split("/", 1)[0]
             svc = getattr(request.app.state, "auth", None)
             allowed = await svc.allowed_apps_of(principal.username) if svc else []
-            if app_id in manifest._ADMIN_ONLY or app_id not in set(allowed or []):
+            permitted = app_id in manifest._ALWAYS_ALLOWED or (
+                app_id not in manifest._ADMIN_ONLY and app_id in set(allowed or [])
+            )
+            if not permitted:
                 return JSONResponse({"detail": "app not allowed"}, status_code=403)
         # Per-account isolation: stamp who is asking so ScopedDB / data dirs land
         # in this account's namespace. Admin keeps the legacy (unsuffixed) scope

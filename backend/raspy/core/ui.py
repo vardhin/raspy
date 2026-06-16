@@ -252,6 +252,35 @@ def accounts(*, title: str | None = None) -> UINode:
     return _node("accounts", title=title)
 
 
+def dropbox(*, title: str | None = None) -> UINode:
+    """The dropbox UI — drop end-to-end-encrypted files onto another account.
+
+    The cross-account sibling of the vault: the shell picks a recipient from the
+    public-key directory (``GET /api/att/identity/keys``), encrypts each file with
+    a fresh data key, seals the metadata header to the recipient's public key, and
+    POSTs it to ``/api/att/dropbox/send``. Below, it lists *received* items
+    (``/api/att/dropbox/items``), filterable by sending account, opening each
+    sealed header with this account's secret key to decrypt + preview the blob.
+    Received chat media (``source='chat'``) shows up here too. One composite Tier-1
+    node; all crypto in the client.
+    """
+    return _node("dropbox", title=title)
+
+
+def chat(*, title: str | None = None) -> UINode:
+    """The chat UI — pick an account and exchange end-to-end-encrypted messages
+    and media.
+
+    Text is sealed to the recipient's public key (and to your own, so you can
+    re-read your sent messages); media is encrypted and delivered through the
+    dropbox (so it also appears in the recipient's dropbox, filterable by sender).
+    The shell ships the whole experience: a thread list, a conversation view with
+    chat bubbles and clustered media carousels, and a composer for text + multiple
+    images at once. One composite Tier-1 node; all crypto in the client.
+    """
+    return _node("chat", title=title)
+
+
 # --- action helpers ---------------------------------------------------------
 
 

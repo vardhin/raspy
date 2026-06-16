@@ -17,6 +17,8 @@
 	import Accounts from './Accounts.svelte';
 	import Connectivity from './Connectivity.svelte';
 	import Terminal from './Terminal.svelte';
+	import Dropbox from './Dropbox.svelte';
+	import Chat from './Chat.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -177,6 +179,10 @@
 	<Connectivity {node} />
 {:else if node.type === 'terminal'}
 	<Terminal {node} />
+{:else if node.type === 'dropbox'}
+	<Dropbox />
+{:else if node.type === 'chat'}
+	<Chat />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

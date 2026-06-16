@@ -20,6 +20,7 @@ import {
 	clearWrappedMasterKey,
 	hasWrappedMasterKey
 } from '$lib/crypto/keystore';
+import { ensureIdentity, type Keypair } from '$lib/crypto/identity';
 
 export type AuthState = 'loading' | 'password' | 'pin' | 'reset' | 'active';
 
@@ -74,6 +75,37 @@ class Auth {
 
 	get masterKey(): Uint8Array | null {
 		return this.#masterKey;
+	}
+
+	/** This account's asymmetric identity keypair (for cross-account dropbox/chat
+	 *  E2E). Provisioned lazily from the master key via ensureIdentity(); held in
+	 *  memory only and cleared on lock/logout alongside the master key. */
+	#keypair = $state<Keypair | null>(null);
+	#identityPromise: Promise<Keypair> | null = null;
+
+	get keypair(): Keypair | null {
+		return this.#keypair;
+	}
+
+	/** Ensure the asymmetric identity is provisioned and return it. Idempotent and
+	 *  coalesced: concurrent callers share one provisioning round-trip. Requires
+	 *  the vault unlocked (master key in memory); throws otherwise. The dropbox and
+	 *  chat apps call this on mount. */
+	async ensureIdentity(): Promise<Keypair> {
+		if (this.#keypair) return this.#keypair;
+		if (!this.#masterKey) throw new Error('vault locked: cannot provision identity');
+		if (!this.#identityPromise) {
+			const key = this.#masterKey;
+			this.#identityPromise = ensureIdentity(key)
+				.then((kp) => {
+					this.#keypair = kp;
+					return kp;
+				})
+				.finally(() => {
+					this.#identityPromise = null;
+				});
+		}
+		return this.#identityPromise;
 	}
 
 	/** Ask the server what screen to show. Called on boot and after a 401. */
@@ -306,6 +338,7 @@ class Auth {
 			/* ignore */
 		}
 		this.#masterKey = null;
+		this.#keypair = null;
 		await clearWrappedMasterKey();
 		this.username = null;
 		this.role = null;
@@ -315,6 +348,8 @@ class Auth {
 	/** Called by api.ts when a request 401s and a refresh couldn't recover. */
 	onAuthLost(needs: 'pin' | 'password'): void {
 		this.#masterKey = needs === 'password' ? null : this.#masterKey;
+		// The keypair was derived from the master key; if that's gone, drop it too.
+		if (needs === 'password') this.#keypair = null;
 		this.state = needs;
 	}
 

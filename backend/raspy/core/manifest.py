@@ -25,6 +25,17 @@ router = APIRouter()
 #   connectivity — controls public internet exposure (tunnels); admin-only by design.
 _ADMIN_ONLY = {"accounts", "files", "stats", "connectivity", "terminal"}
 
+# Backend-only utility attachments: loaded and routed, but never shown as a sidebar
+# app to anyone (no UI descriptor of their own). ``identity`` is the public-key
+# directory that powers cross-account dropbox/chat — a service, not an app.
+_HIDDEN = {"identity"}
+
+# Service attachments every account (incl. children) may always reach, regardless
+# of their ``allowed_apps`` list — they back features that other allowed apps need.
+# ``identity`` is the public-key directory used by dropbox/chat; without it a child
+# granted dropbox/chat couldn't publish or look up keys.
+_ALWAYS_ALLOWED = {"identity"}
+
 
 async def _visible_attachments(request: Request) -> list[dict[str, Any]]:
     """The attachments the current account may see.
@@ -34,7 +45,7 @@ async def _visible_attachments(request: Request) -> list[dict[str, Any]]:
     read live from the DB so an admin toggling a permission takes effect on the
     child's next manifest fetch."""
     registry = request.app.state.registry
-    attachments = registry.manifest()
+    attachments = [a for a in registry.manifest() if a["id"] not in _HIDDEN]
     principal = principal_from_request(request)
     if principal is None:
         return []  # gate would normally 401 first; defensive.
