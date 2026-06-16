@@ -2,9 +2,10 @@
 	// Contacts — a personal address book + a "keep in touch" reminder list, in one
 	// app with a topbar switch:
 	//
-	//   • Keep in touch (default) — an accordion of just names. Tap a name to expand
-	//     a compact panel (avatar + the quick ways to reach them) so you remember to
-	//     call and stay in touch, without the noise of the full directory.
+	//   • Keep in touch (default) — favorites only. An accordion of just the names
+	//     you've flagged to keep in touch with. Tap a name to expand a compact panel
+	//     (avatar + the quick ways to reach them) so you remember to call, without
+	//     the noise of the full directory. Flag a contact from its editor.
 	//   • Directory — every contact as a card with photos + all fields, opening a
 	//     full detail/edit view.
 	//
@@ -45,6 +46,7 @@
 		mime: string;
 		ord: number;
 		url: string;
+		cover?: boolean;
 		enc?: boolean;
 		key_wrapped?: string;
 		nonce_wrapped?: string;
@@ -57,6 +59,7 @@
 		phone: string;
 		email: string;
 		address: string;
+		keep_in_touch: boolean;
 		images: Img[];
 	};
 
@@ -97,9 +100,14 @@
 		for (const c of contacts) for (const im of c.images) decrypt(im);
 	});
 
-	// First (cover) photo of a contact, as a ready object URL or '' while loading.
+	// The contact's chosen cover image (or the lowest-ord one if none is flagged).
+	function coverImage(c: Contact): Img | undefined {
+		return c.images.find((im) => im.cover) ?? c.images.slice().sort((a, b) => a.ord - b.ord)[0];
+	}
+
+	// Cover photo of a contact, as a ready object URL or '' while loading.
 	function avatarSrc(c: Contact): string {
-		const im = c.images.slice().sort((a, b) => a.ord - b.ord)[0];
+		const im = coverImage(c);
 		if (!im) return '';
 		if (!im.enc) return attResourceUrl(ID, im.url, {});
 		const u = decrypted[im.hash];
@@ -141,9 +149,11 @@
 	}
 
 	let filtered = $derived.by(() => {
+		// "Keep in touch" shows only favorited contacts; the directory shows all.
+		const base = view === 'touch' ? contacts.filter((c) => c.keep_in_touch) : contacts;
 		const q = query.trim().toLowerCase();
-		if (!q) return contacts;
-		return contacts.filter((c) =>
+		if (!q) return base;
+		return base.filter((c) =>
 			[c.name, c.description, c.phone, c.email, c.address]
 				.join(' ')
 				.toLowerCase()
@@ -159,6 +169,7 @@
 	let formPhone = $state('');
 	let formEmail = $state('');
 	let formAddress = $state('');
+	let formKeepInTouch = $state(false);
 	let pendingFiles = $state<File[]>([]);
 	let uploadBusy = $state(false);
 	let fileInput = $state<HTMLInputElement>();
@@ -184,6 +195,8 @@
 		formPhone = '';
 		formEmail = '';
 		formAddress = '';
+		// Default a new contact to "keep in touch" when adding from that view.
+		formKeepInTouch = view === 'touch';
 		pendingFiles = [];
 		editorOpen = true;
 	}
@@ -194,6 +207,7 @@
 		formPhone = c.phone;
 		formEmail = c.email;
 		formAddress = c.address;
+		formKeepInTouch = c.keep_in_touch;
 		pendingFiles = [];
 		editorOpen = true;
 	}
@@ -232,7 +246,8 @@
 				description: formDescription,
 				phone: formPhone,
 				email: formEmail,
-				address: formAddress
+				address: formAddress,
+				keep_in_touch: formKeepInTouch
 			};
 			let contact: Contact;
 			if (editing) {
@@ -249,6 +264,17 @@
 			error = e instanceof Error ? e.message : 'failed to save contact';
 		} finally {
 			uploadBusy = false;
+		}
+	}
+
+	// Flip a contact's "keep in touch" flag straight from the detail view.
+	async function toggleKeepInTouch(c: Contact) {
+		try {
+			await attAction(ID, 'PATCH', `contacts/${c.id}`, { keep_in_touch: !c.keep_in_touch });
+			await load();
+			if (viewing?.id === c.id) viewing = contacts.find((x) => x.id === c.id) ?? null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'failed to update';
 		}
 	}
 
@@ -275,6 +301,19 @@
 		}
 	}
 
+	// Make this image the contact's cover (the one shown in minimized/card views).
+	async function setCover(im: Img) {
+		if (im.cover) return;
+		try {
+			await attAction(ID, 'PATCH', `images/${im.id}/cover`);
+			await load();
+			if (editing) editing = contacts.find((c) => c.id === editing!.id) ?? null;
+			if (viewing) viewing = contacts.find((c) => c.id === viewing!.id) ?? null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'failed to set cover';
+		}
+	}
+
 	function onPickFiles(e: Event) {
 		const files = (e.target as HTMLInputElement).files;
 		if (files) pendingFiles = [...pendingFiles, ...Array.from(files)];
@@ -284,9 +323,15 @@
 	// --- detail view modal ---------------------------------------------------
 	let viewing = $state<Contact | null>(null);
 	let viewIdx = $state(0);
+	// Index of a contact's cover within its ord-sorted images (what the carousels use).
+	function coverIndex(c: Contact): number {
+		const sorted = c.images.slice().sort((a, b) => a.ord - b.ord);
+		const i = sorted.findIndex((im) => im.cover);
+		return i >= 0 ? i : 0;
+	}
 	function openView(c: Contact) {
 		viewing = c;
-		viewIdx = 0;
+		viewIdx = coverIndex(c);
 	}
 
 	onMount(() => {
@@ -342,14 +387,31 @@
 	{#if loading && contacts.length === 0}
 		<Text role="muted">Loading…</Text>
 	{:else if filtered.length === 0}
+		{@const noFavorites = view === 'touch' && !query && contacts.length > 0}
 		<Surface level={1}>
 			<Stack gap={2} align="center">
-				<Icon name="contact" size={28} />
-				<Text role="heading">{query ? 'No matches' : 'No contacts yet'}</Text>
-				<Text role="muted">
-					{query ? 'Try a different search.' : 'Add someone to start keeping in touch.'}
+				<Icon name={noFavorites ? 'star' : 'contact'} size={28} />
+				<Text role="heading">
+					{query ? 'No matches' : noFavorites ? 'No favorites yet' : 'No contacts yet'}
 				</Text>
-				{#if !query}<Button onclick={openCreate}><Icon name="plus" size={15} /> Add a contact</Button>{/if}
+				<Text role="muted">
+					{#if query}
+						Try a different search.
+					{:else if noFavorites}
+						Flag a contact as “Keep in touch” to see them here. Find them in the directory.
+					{:else}
+						Add someone to start keeping in touch.
+					{/if}
+				</Text>
+				{#if query}
+					<!-- search has results elsewhere; nothing to add here -->
+				{:else if noFavorites}
+					<Button onclick={() => (view = 'directory')}>
+						<Icon name="grid" size={15} /> Go to directory
+					</Button>
+				{:else}
+					<Button onclick={openCreate}><Icon name="plus" size={15} /> Add a contact</Button>
+				{/if}
 			</Stack>
 		</Surface>
 	{:else if view === 'touch'}
@@ -416,7 +478,9 @@
 						{#if av}<img src={av} alt="" />{:else}<span class="ini">{initials(c.name)}</span>{/if}
 						{#if c.images.length > 1}<span class="count">{c.images.length}</span>{/if}
 					</span>
-					<span class="card-name">{c.name}</span>
+					<span class="card-name">
+						{#if c.keep_in_touch}<Icon name="star" size={12} />{/if}{c.name}
+					</span>
 					{#if c.description}<span class="card-desc">{c.description}</span>{/if}
 					<span class="card-meta">
 						{#if c.phone}<span class="chip"><Icon name="phone" size={12} />{c.phone}</span>{/if}
@@ -452,13 +516,19 @@
 					<div class="reach-row"><Icon name="map-pin" size={16} /><span>{viewing.address}</span></div>
 				{/if}
 			</div>
-			<Stack direction="row" gap={2} justify="end">
-				<Button variant="danger" onclick={() => deleteContact(viewing!)}>
-					<Icon name="trash" size={15} /> Delete
+			<Stack direction="row" gap={2} justify="between" align="center">
+				<Button variant="ghost" onclick={() => toggleKeepInTouch(viewing!)}>
+					<Icon name="star" size={15} />
+					{viewing.keep_in_touch ? 'In keep in touch' : 'Keep in touch'}
 				</Button>
-				<Button variant="ghost" onclick={() => openEdit(viewing!)}>
-					<Icon name="edit" size={15} /> Edit
-				</Button>
+				<Stack direction="row" gap={2}>
+					<Button variant="danger" onclick={() => deleteContact(viewing!)}>
+						<Icon name="trash" size={15} /> Delete
+					</Button>
+					<Button variant="ghost" onclick={() => openEdit(viewing!)}>
+						<Icon name="edit" size={15} /> Edit
+					</Button>
+				</Stack>
 			</Stack>
 		</Stack>
 	</Modal>
@@ -486,9 +556,12 @@
 		<Field type="email" label="Email" placeholder="name@example.com" bind:value={formEmail} />
 		<Field type="textarea" label="Address" placeholder="Street, city, country" bind:value={formAddress} />
 
+		<Field type="checkbox" label="Keep in touch" bind:value={formKeepInTouch} />
+
 		{#if editing && editing.images.length > 0}
 			<div>
 				<Text role="label">Photos</Text>
+				<Text role="muted">Tap a photo to make it the cover.</Text>
 				<div class="thumbs">
 					{#each editing.images.slice().sort((a, b) => a.ord - b.ord) as im (im.id)}
 						{@const src = im.enc
@@ -496,8 +569,15 @@
 								? decrypted[im.hash]
 								: ''
 							: attResourceUrl(ID, im.url, {})}
-						<div class="thumb">
-							{#if src}<img {src} alt="" />{:else}<div class="thumb-loading"><Icon name="refresh-cw" size={16} /></div>{/if}
+						<div class="thumb" class:is-cover={im.cover}>
+							<button
+								class="thumb-pick"
+								aria-label={im.cover ? 'Cover photo' : 'Set as cover'}
+								onclick={() => setCover(im)}
+							>
+								{#if src}<img {src} alt="" />{:else}<div class="thumb-loading"><Icon name="refresh-cw" size={16} /></div>{/if}
+							</button>
+							{#if im.cover}<span class="cover-badge"><Icon name="star" size={11} /> Cover</span>{/if}
 							<button class="rm" aria-label="Remove photo" onclick={() => deleteImage(im)}>
 								<Icon name="x" size={13} />
 							</button>
@@ -702,8 +782,15 @@
 		border-color: var(--accent);
 	}
 	.card-name {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
 		font-weight: var(--font-weight-bold);
 		line-height: 1.2;
+	}
+	.card-name :global(svg) {
+		color: var(--accent);
+		flex: none;
 	}
 	.card-desc {
 		font-size: 0.8rem;
@@ -753,10 +840,41 @@
 		overflow: hidden;
 		border: var(--border-width) solid var(--border-color);
 	}
+	.thumb.is-cover {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent);
+	}
+	.thumb-pick {
+		display: block;
+		width: 100%;
+		height: 100%;
+		padding: 0;
+		border: none;
+		background: none;
+		cursor: pointer;
+	}
 	.thumb img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+		display: block;
+	}
+	.cover-badge {
+		position: absolute;
+		left: 2px;
+		bottom: 2px;
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		padding: 1px 5px;
+		font-size: 0.6rem;
+		border-radius: var(--radius-full);
+		background: var(--accent);
+		color: var(--on-accent, #fff);
+		pointer-events: none;
+	}
+	.cover-badge :global(svg) {
+		color: inherit;
 	}
 	.thumb-loading {
 		display: flex;

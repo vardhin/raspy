@@ -42,6 +42,7 @@ class ContactCreate(BaseModel):
     phone: str = Field(default="", max_length=200)
     email: str = Field(default="", max_length=320)
     address: str = Field(default="", max_length=2_000)
+    keep_in_touch: bool = Field(default=False)
 
 
 class ContactUpdate(BaseModel):
@@ -50,6 +51,7 @@ class ContactUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=200)
     email: str | None = Field(default=None, max_length=320)
     address: str | None = Field(default=None, max_length=2_000)
+    keep_in_touch: bool | None = Field(default=None)
 
 
 class Contacts(BaseAttachment):
@@ -81,12 +83,19 @@ class Contacts(BaseAttachment):
                 phone       TEXT NOT NULL DEFAULT '',
                 email       TEXT NOT NULL DEFAULT '',
                 address     TEXT NOT NULL DEFAULT '',
+                keep_in_touch INTEGER NOT NULL DEFAULT 0,
                 created     REAL NOT NULL,
                 updated     REAL NOT NULL
             )
             """
         )
         await self.db.execute(f"CREATE INDEX IF NOT EXISTS {c}_name ON {c} (name)")
+        # Migration: add keep_in_touch to tables created before this column existed.
+        cols = await self.db.fetch_all(f"PRAGMA table_info({c})")
+        if not any(col["name"] == "keep_in_touch" for col in cols):
+            await self.db.execute(
+                f"ALTER TABLE {c} ADD COLUMN keep_in_touch INTEGER NOT NULL DEFAULT 0"
+            )
         await self.db.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {img} (
@@ -101,13 +110,22 @@ class Contacts(BaseAttachment):
                 -- secretstream header (not secret).
                 key_wrapped   TEXT,
                 nonce_wrapped TEXT,
-                header        TEXT
+                header        TEXT,
+                -- Exactly one image per contact has cover=1; it's the one shown in
+                -- minimized/avatar/card views. Falls back to lowest ord when unset.
+                cover         INTEGER NOT NULL DEFAULT 0
             )
             """
         )
         await self.db.execute(
             f"CREATE INDEX IF NOT EXISTS {img}_contact ON {img} (contact_id, ord)"
         )
+        # Migration: add cover to image tables created before this column existed.
+        icols = await self.db.fetch_all(f"PRAGMA table_info({img})")
+        if not any(col["name"] == "cover" for col in icols):
+            await self.db.execute(
+                f"ALTER TABLE {img} ADD COLUMN cover INTEGER NOT NULL DEFAULT 0"
+            )
         self._ready.add(c)
         return c, img
 
@@ -127,7 +145,7 @@ class Contacts(BaseAttachment):
     async def _images_for(self, contact_id: int) -> list[dict[str, Any]]:
         img = self.db.table("images")
         rows = await self.db.fetch_all(
-            f"SELECT id, hash, mime, ord, key_wrapped, nonce_wrapped, header "
+            f"SELECT id, hash, mime, ord, key_wrapped, nonce_wrapped, header, cover "
             f"FROM {img} WHERE contact_id = ? ORDER BY ord, id",
             (contact_id,),
         )
@@ -135,7 +153,28 @@ class Contacts(BaseAttachment):
             row["url"] = f"image/{row['hash']}"
             # `enc` tells the client whether to decrypt (always true for new rows).
             row["enc"] = bool(row.get("key_wrapped"))
+            row["cover"] = bool(row.get("cover"))
         return rows
+
+    async def _ensure_cover(self, contact_id: int) -> None:
+        """Guarantee a contact with images has exactly one cover: if none is flagged
+        (e.g. the cover was deleted, or these are the first photos), promote the
+        lowest-ord image. No-op for contacts with no photos."""
+        img = self.db.table("images")
+        has = await self.db.fetch_one(
+            f"SELECT 1 AS x FROM {img} WHERE contact_id = ? AND cover = 1 LIMIT 1",
+            (contact_id,),
+        )
+        if has is not None:
+            return
+        first = await self.db.fetch_one(
+            f"SELECT id FROM {img} WHERE contact_id = ? ORDER BY ord, id LIMIT 1",
+            (contact_id,),
+        )
+        if first is not None:
+            await self.db.execute(
+                f"UPDATE {img} SET cover = 1 WHERE id = ?", (first["id"],)
+            )
 
     async def _contact_api(self, row: dict[str, Any], *, with_images: bool = True) -> dict[str, Any]:
         out = {
@@ -145,6 +184,7 @@ class Contacts(BaseAttachment):
             "phone": row["phone"],
             "email": row["email"],
             "address": row["address"],
+            "keep_in_touch": bool(row["keep_in_touch"]),
             "created": row["created"],
             "updated": row["updated"],
         }
@@ -184,13 +224,14 @@ class Contacts(BaseAttachment):
             now = time.time()
             new_id = await self.db.execute_insert(
                 f"INSERT INTO {c} (name, description, phone, email, address, "
-                f"created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                f"keep_in_touch, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     body.name.strip(),
                     body.description,
                     body.phone.strip(),
                     body.email.strip(),
                     body.address.strip(),
+                    int(body.keep_in_touch),
                     now,
                     now,
                 ),
@@ -214,6 +255,9 @@ class Contacts(BaseAttachment):
                 if value is not None:
                     sets.append(f"{field_} = ?")
                     params.append(value.strip() if field_ != "description" else value)
+            if body.keep_in_touch is not None:
+                sets.append("keep_in_touch = ?")
+                params.append(int(body.keep_in_touch))
             if sets:
                 sets.append("updated = ?")
                 params.append(time.time())
@@ -281,6 +325,11 @@ class Contacts(BaseAttachment):
                 f"key_wrapped, nonce_wrapped, header) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (contact_id, h, mime, ord_, time.time(), key_wrapped, nonce_wrapped, header),
             )
+            # The very first photo becomes the cover automatically.
+            await self._ensure_cover(contact_id)
+            cover_row = await self.db.fetch_one(
+                f"SELECT cover FROM {img} WHERE id = ?", (img_id,)
+            )
             self.events.publish("contacts.changed", {"id": contact_id})
             return {
                 "id": img_id,
@@ -292,7 +341,24 @@ class Contacts(BaseAttachment):
                 "key_wrapped": key_wrapped,
                 "nonce_wrapped": nonce_wrapped,
                 "header": header,
+                "cover": bool((cover_row or {}).get("cover")),
             }
+
+        @r.patch("/images/{image_id}/cover", status_code=204)
+        async def set_cover(image_id: int) -> None:
+            """Make this image the contact's cover; clears the flag on its siblings."""
+            _, img = await self._ensure()
+            row = await self.db.fetch_one(
+                f"SELECT contact_id FROM {img} WHERE id = ?", (image_id,)
+            )
+            if row is None:
+                raise HTTPException(404, "image not found")
+            cid = row["contact_id"]
+            await self.db.execute(
+                f"UPDATE {img} SET cover = 0 WHERE contact_id = ?", (cid,)
+            )
+            await self.db.execute(f"UPDATE {img} SET cover = 1 WHERE id = ?", (image_id,))
+            self.events.publish("contacts.changed", {"id": cid})
 
         @r.delete("/images/{image_id}", status_code=204)
         async def delete_image(image_id: int) -> None:
@@ -304,6 +370,8 @@ class Contacts(BaseAttachment):
                 raise HTTPException(404, "image not found")
             await self.db.execute(f"DELETE FROM {img} WHERE id = ?", (image_id,))
             await self._gc_blob(row["hash"])
+            # If the cover was the one removed, promote another image.
+            await self._ensure_cover(row["contact_id"])
             self.events.publish("contacts.changed", {"id": row["contact_id"]})
 
         @r.patch("/contacts/{contact_id}/images/order", status_code=204)
