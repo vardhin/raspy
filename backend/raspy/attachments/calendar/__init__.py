@@ -134,7 +134,10 @@ class Calendar(BaseAttachment):
                 -- the master key, header is the secretstream header (not secret).
                 key_wrapped  TEXT,
                 nonce_wrapped TEXT,
-                header       TEXT
+                header       TEXT,
+                -- Exactly one image per entry has cover=1; it's the one shown in the
+                -- minimized polaroid window. Falls back to lowest ord when unset.
+                cover        INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -144,6 +147,10 @@ class Calendar(BaseAttachment):
         for col in ("key_wrapped", "nonce_wrapped", "header"):
             if col not in have:
                 await self.db.execute(f"ALTER TABLE {img} ADD COLUMN {col} TEXT")
+        if "cover" not in have:
+            await self.db.execute(
+                f"ALTER TABLE {img} ADD COLUMN cover INTEGER NOT NULL DEFAULT 0"
+            )
         await self.db.execute(
             f"CREATE INDEX IF NOT EXISTS {img}_entry ON {img} (entry_id, ord)"
         )
@@ -174,7 +181,7 @@ class Calendar(BaseAttachment):
     async def _images_for(self, entry_id: int) -> list[dict[str, Any]]:
         img = self.db.table("images")
         rows = await self.db.fetch_all(
-            f"SELECT id, hash, mime, ord, key_wrapped, nonce_wrapped, header "
+            f"SELECT id, hash, mime, ord, key_wrapped, nonce_wrapped, header, cover "
             f"FROM {img} WHERE entry_id = ? ORDER BY ord, id",
             (entry_id,),
         )
@@ -182,7 +189,27 @@ class Calendar(BaseAttachment):
             row["url"] = f"image/{row['hash']}"
             # `enc` tells the client whether to decrypt; legacy rows are plaintext.
             row["enc"] = bool(row.get("key_wrapped"))
+            row["cover"] = bool(row.get("cover"))
         return rows
+
+    async def _ensure_cover(self, entry_id: int) -> None:
+        """Guarantee an entry with images has exactly one cover: promote the
+        lowest-ord image when none is flagged. No-op for entries with no photos."""
+        img = self.db.table("images")
+        has = await self.db.fetch_one(
+            f"SELECT 1 AS x FROM {img} WHERE entry_id = ? AND cover = 1 LIMIT 1",
+            (entry_id,),
+        )
+        if has is not None:
+            return
+        first = await self.db.fetch_one(
+            f"SELECT id FROM {img} WHERE entry_id = ? ORDER BY ord, id LIMIT 1",
+            (entry_id,),
+        )
+        if first is not None:
+            await self.db.execute(
+                f"UPDATE {img} SET cover = 1 WHERE id = ?", (first["id"],)
+            )
 
     async def _entry_api(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -431,6 +458,11 @@ class Calendar(BaseAttachment):
                 f"key_wrapped, nonce_wrapped, header) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (entry_id, h, mime, ord_, time.time(), key_wrapped, nonce_wrapped, header),
             )
+            # The very first photo becomes the cover automatically.
+            await self._ensure_cover(entry_id)
+            cover_row = await self.db.fetch_one(
+                f"SELECT cover FROM {img} WHERE id = ?", (img_id,)
+            )
             row = await _row(entry_id)
             self.events.publish("calendar.changed", {"date": row["date"]})
             return {
@@ -443,7 +475,24 @@ class Calendar(BaseAttachment):
                 "key_wrapped": key_wrapped,
                 "nonce_wrapped": nonce_wrapped,
                 "header": header,
+                "cover": bool((cover_row or {}).get("cover")),
             }
+
+        @r.patch("/images/{image_id}/cover", status_code=204)
+        async def set_cover(image_id: int) -> None:
+            """Make this image the entry's cover; clears the flag on its siblings."""
+            e, img = await self._ensure()
+            row = await self.db.fetch_one(
+                f"SELECT entry_id FROM {img} WHERE id = ?", (image_id,)
+            )
+            if row is None:
+                raise HTTPException(404, "image not found")
+            eid = row["entry_id"]
+            await self.db.execute(f"UPDATE {img} SET cover = 0 WHERE entry_id = ?", (eid,))
+            await self.db.execute(f"UPDATE {img} SET cover = 1 WHERE id = ?", (image_id,))
+            entry = await self.db.fetch_one(f"SELECT date FROM {e} WHERE id = ?", (eid,))
+            if entry:
+                self.events.publish("calendar.changed", {"date": entry["date"]})
 
         @r.delete("/images/{image_id}", status_code=204)
         async def delete_image(image_id: int) -> None:
@@ -455,6 +504,8 @@ class Calendar(BaseAttachment):
                 raise HTTPException(404, "image not found")
             await self.db.execute(f"DELETE FROM {img} WHERE id = ?", (image_id,))
             await self._gc_blob(row["hash"])
+            # If the cover was the one removed, promote another image.
+            await self._ensure_cover(row["entry_id"])
             entry = await self.db.fetch_one(
                 f"SELECT date FROM {e} WHERE id = ?", (row["entry_id"],)
             )

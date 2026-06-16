@@ -344,6 +344,7 @@
 		position: absolute;
 		top: var(--space-2);
 		right: var(--space-2);
+		z-index: 2;
 		display: flex;
 		gap: var(--space-1);
 		opacity: 0;
@@ -379,6 +380,7 @@
 	.nav {
 		position: absolute;
 		top: 50%;
+		z-index: 2;
 		transform: translateY(-50%);
 		display: inline-flex;
 		align-items: center;
@@ -407,6 +409,14 @@
 	.nav:hover {
 		background: var(--surface-2);
 	}
+	/* Touch devices have no hover: keep the nav arrows + tools visible (and so
+	   tappable) instead of falling through to the stage, which opens full view. */
+	@media (hover: none) {
+		.nav,
+		.tools {
+			opacity: 1;
+		}
+	}
 	.nav.prev {
 		left: var(--space-2);
 	}
@@ -418,6 +428,7 @@
 		bottom: var(--space-2);
 		left: 0;
 		right: 0;
+		z-index: 2;
 		display: flex;
 		gap: var(--space-1);
 		justify-content: center;

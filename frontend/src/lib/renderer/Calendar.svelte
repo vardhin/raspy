@@ -47,6 +47,7 @@
 		mime: string;
 		ord: number;
 		url: string;
+		cover?: boolean;
 		enc?: boolean;
 		key_wrapped?: string;
 		nonce_wrapped?: string;
@@ -250,6 +251,13 @@
 	function entryImages(entry: Entry) {
 		return imagesToItems(entry.images, entry.title);
 	}
+	// Index of the entry's cover within its ord-sorted images (what carousels use);
+	// the minimized polaroid window opens on this so the cover is what you see.
+	function coverIndex(entry: Entry): number {
+		const sorted = entry.images.slice().sort((a, b) => a.ord - b.ord);
+		const i = sorted.findIndex((im) => im.cover);
+		return i >= 0 ? i : 0;
+	}
 	function isPast(date: string): boolean {
 		return date < todayISO();
 	}
@@ -260,8 +268,10 @@
 	function cycleEntry(day: Day, delta: number) {
 		const n = day.entries.length;
 		if (n < 2) return;
-		entryIdx[day.date] = ((entryIdx[day.date] ?? 0) + delta + n) % n;
-		imgIdx[day.date] = 0;
+		const i = ((entryIdx[day.date] ?? 0) + delta + n) % n;
+		entryIdx[day.date] = i;
+		// Reset the image to the new entry's cover.
+		imgIdx[day.date] = coverIndex(day.entries[i]);
 	}
 
 	// --- editor modal --------------------------------------------------------
@@ -396,9 +406,25 @@
 		try {
 			await attDeleteQuery(ID, `images/${im.id}`, {});
 			await load();
-			if (viewing) viewing = days.flatMap((d) => d.entries).find((e) => e.id === viewing!.id) ?? null;
+			const all = days.flatMap((d) => d.entries);
+			if (editing) editing = all.find((e) => e.id === editing!.id) ?? null;
+			if (viewing) viewing = all.find((e) => e.id === viewing!.id) ?? null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'failed to remove photo';
+		}
+	}
+
+	// Make this image the entry's cover (shown in the minimized polaroid window).
+	async function setCover(im: Img) {
+		if (im.cover) return;
+		try {
+			await attAction(ID, 'PATCH', `images/${im.id}/cover`);
+			await load();
+			const all = days.flatMap((d) => d.entries);
+			if (editing) editing = all.find((e) => e.id === editing!.id) ?? null;
+			if (viewing) viewing = all.find((e) => e.id === viewing!.id) ?? null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'failed to set cover';
 		}
 	}
 
@@ -414,7 +440,7 @@
 
 	function openView(entry: Entry) {
 		viewing = entry;
-		viewIdx = 0;
+		viewIdx = coverIndex(entry);
 	}
 
 	function fmtDate(date: string): string {
@@ -535,7 +561,7 @@
 									compact
 									rounded={false}
 									fit="contain"
-									index={imgIdx[day.date] ?? 0}
+									index={imgIdx[day.date] ?? coverIndex(entry)}
 									onindex={(i) => (imgIdx[day.date] = i)}
 									onactivate={() => openView(entry)}
 								/>
@@ -727,6 +753,7 @@
 		{#if editing && editing.images.length > 0}
 			<div>
 				<Text role="label">Photos</Text>
+				<Text role="muted">Tap a photo to make it the cover.</Text>
 				<div class="thumbs">
 					{#each editing.images.slice().sort((a, b) => a.ord - b.ord) as im (im.id)}
 						{@const src = im.enc
@@ -734,12 +761,19 @@
 								? decrypted[im.hash]
 								: ''
 							: attResourceUrl(ID, im.url, {})}
-						<div class="thumb">
-							{#if src}
-								<img {src} alt="" />
-							{:else}
-								<div class="thumb-loading"><Icon name="refresh-cw" size={16} /></div>
-							{/if}
+						<div class="thumb" class:is-cover={im.cover}>
+							<button
+								class="thumb-pick"
+								aria-label={im.cover ? 'Cover photo' : 'Set as cover'}
+								onclick={() => setCover(im)}
+							>
+								{#if src}
+									<img {src} alt="" />
+								{:else}
+									<div class="thumb-loading"><Icon name="refresh-cw" size={16} /></div>
+								{/if}
+							</button>
+							{#if im.cover}<span class="cover-badge"><Icon name="star" size={11} /> Cover</span>{/if}
 							<button class="rm" aria-label="Remove photo" onclick={() => deleteImage(im)}>
 								<Icon name="x" size={13} />
 							</button>
@@ -1089,10 +1123,41 @@
 		overflow: hidden;
 		border: var(--border-width) solid var(--border-color);
 	}
+	.thumb.is-cover {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent);
+	}
+	.thumb-pick {
+		display: block;
+		width: 100%;
+		height: 100%;
+		padding: 0;
+		border: none;
+		background: none;
+		cursor: pointer;
+	}
 	.thumb img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+		display: block;
+	}
+	.cover-badge {
+		position: absolute;
+		left: 2px;
+		bottom: 2px;
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		padding: 1px 5px;
+		font-size: 0.6rem;
+		border-radius: var(--radius-full);
+		background: var(--accent);
+		color: var(--on-accent, #fff);
+		pointer-events: none;
+	}
+	.cover-badge :global(svg) {
+		color: inherit;
 	}
 	.thumb-loading {
 		display: flex;
