@@ -18,7 +18,8 @@ auth.
 7. [50-deployment.md](50-deployment.md) — running on the Pi, the four transports, ops.
 8. [55-distribution.md](55-distribution.md) — one-binary builds, the installer, self-update.
 9. [56-connectivity.md](56-connectivity.md) — the connectivity attachment (tunnels), security boundary.
-10. [60-roadmap.md](60-roadmap.md) — milestones and build order.
+10. [57-terminal.md](57-terminal.md) — the terminal attachment (PTY over the encrypted channel).
+11. [60-roadmap.md](60-roadmap.md) — milestones and build order.
 
 ## The three ideas everything hangs on
 

@@ -16,6 +16,7 @@
 	import Notes from './Notes.svelte';
 	import Accounts from './Accounts.svelte';
 	import Connectivity from './Connectivity.svelte';
+	import Terminal from './Terminal.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -174,6 +175,8 @@
 	<Accounts />
 {:else if node.type === 'connectivity'}
 	<Connectivity {node} />
+{:else if node.type === 'terminal'}
+	<Terminal {node} />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}
