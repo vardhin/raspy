@@ -83,6 +83,51 @@ body {
 	background: transparent;
 }
 
+/* ---------------------------------------------------------------------------
+   Surface utilities — the canonical concept-aware "material" recipe, global so
+   any component/app can opt in (Svelte scopes component styles, so a shared
+   class must live here). These compose BOTH theme axes the same way Surface.svelte
+   does: color (--surface hue) + concept (radius, border, shadow, blur, alpha).
+   Use `.u-surface` for a level-1 card and `.u-surface-2` for a raised one. This
+   is what makes neumorphism/material/glass/etc. show up on hand-built surfaces —
+   the elevation lives in --shadow-*, which flat layouts otherwise drop.
+   --------------------------------------------------------------------------- */
+.u-surface,
+.u-surface-2 {
+	background: color-mix(
+		in srgb,
+		var(--_u-color) calc(var(--surface-alpha, 1) * 100%),
+		transparent
+	);
+	backdrop-filter: blur(var(--blur));
+	-webkit-backdrop-filter: blur(var(--blur));
+	border: var(--border-width) solid var(--border-color);
+	border-radius: var(--radius-md);
+	box-shadow: var(--_u-shadow);
+	color: var(--fg);
+	transition:
+		transform var(--motion-fast) var(--motion-ease),
+		box-shadow var(--motion-base) var(--motion-ease),
+		border-color var(--motion-fast) var(--motion-ease),
+		background var(--motion-base) var(--motion-ease);
+}
+.u-surface {
+	--_u-color: var(--surface);
+	--_u-shadow: var(--shadow-sm);
+}
+.u-surface-2 {
+	--_u-color: var(--surface-2);
+	--_u-shadow: var(--shadow-md);
+}
+/* Interactive variant: lifts by the concept's elevation on hover. */
+.u-interactive {
+	cursor: pointer;
+}
+.u-interactive:hover {
+	transform: translateY(calc(var(--depth) * -1px));
+	border-color: var(--accent);
+}
+
 /* Reduced-motion users get no transitions regardless of concept. */
 @media (prefers-reduced-motion: reduce) {
 	*,

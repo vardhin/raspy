@@ -344,6 +344,7 @@
 		background: color-mix(in srgb, var(--surface) 58%, transparent);
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-sm);
 		cursor: pointer;
 		text-align: left;
 	}
@@ -395,6 +396,7 @@
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-md);
 		background: color-mix(in srgb, var(--surface) 58%, transparent);
+		box-shadow: var(--shadow-sm);
 	}
 	.disclosure > summary {
 		display: flex;

@@ -249,7 +249,7 @@
 		<div class="grid" class:busy>
 			{#each listing.entries as entry (entry.path)}
 				<div class="cell">
-					<button class="entry" ondblclick={() => open(entry)} onclick={() => open(entry)}>
+					<button class="entry u-surface u-interactive" ondblclick={() => open(entry)} onclick={() => open(entry)}>
 						<span class="ico" class:dir={entry.kind === 'dir'}>
 							<Icon name={iconFor(entry)} size={26} />
 						</span>
@@ -385,6 +385,8 @@
 	.cell {
 		position: relative;
 	}
+	/* Surface chrome (bg/border/radius/shadow/blur + hover lift) comes from the
+	   global .u-surface .u-interactive utilities so every concept applies. */
 	.entry {
 		display: flex;
 		flex-direction: column;
@@ -392,23 +394,7 @@
 		gap: var(--space-1);
 		width: 100%;
 		padding: var(--space-3) var(--space-2);
-		background: color-mix(
-			in srgb,
-			var(--surface) calc(var(--surface-alpha, 1) * 100%),
-			transparent
-		);
-		border: var(--border-width) solid var(--border-color);
-		border-radius: var(--radius-md);
-		color: var(--fg);
-		cursor: pointer;
 		text-align: center;
-		transition:
-			transform var(--motion-fast) var(--motion-ease),
-			border-color var(--motion-fast) var(--motion-ease);
-	}
-	.entry:hover {
-		border-color: var(--accent);
-		transform: translateY(calc(var(--depth) * -1px));
 	}
 	.ico {
 		color: var(--muted);

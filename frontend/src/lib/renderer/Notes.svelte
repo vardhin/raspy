@@ -626,6 +626,9 @@
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-lg);
 		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha, 1) * 100%), transparent);
+		box-shadow: var(--shadow-sm);
+		backdrop-filter: blur(var(--blur));
+		-webkit-backdrop-filter: blur(var(--blur));
 		overflow: hidden;
 	}
 	.pane.full {

@@ -33,24 +33,30 @@
 		return attResourceUrl('vibe', `image/${date}`, {});
 	}
 
-	async function refreshThumbs(saved: SavedWallpaper[]) {
-		const next: Record<string, string> = {};
-		for (const w of saved) {
-			if (thumbs[w.id]) {
-				next[w.id] = thumbs[w.id];
-			} else {
-				next[w.id] = await wallpaper.thumbUrl(w.id);
+	// Load any thumbnails we don't have yet, and revoke ones whose wallpaper was
+	// removed. Driven off the saved-ids signature (NOT off `thumbs`, so this never
+	// feeds back into itself — that caused an effect_update_depth loop).
+	async function syncThumbs(ids: string[]) {
+		for (const id of ids) {
+			if (!thumbs[id]) {
+				const url = await wallpaper.thumbUrl(id);
+				if (url) thumbs[id] = url; // mutate in place; no new object each run
 			}
 		}
-		// Revoke any thumbs no longer referenced.
-		for (const [id, url] of Object.entries(thumbs)) {
-			if (!next[id]) wallpaper.revoke(url);
+		for (const id of Object.keys(thumbs)) {
+			if (!ids.includes(id)) {
+				wallpaper.revoke(thumbs[id]);
+				delete thumbs[id];
+			}
 		}
-		thumbs = next;
 	}
 
+	// Track only the id list (a primitive string), so the effect re-runs when the
+	// set of saved wallpapers changes — not when `thumbs` mutates.
+	const savedIds = $derived(wallpaper.saved.map((w) => w.id).join(','));
 	$effect(() => {
-		void refreshThumbs(wallpaper.saved);
+		void savedIds; // establish the dependency
+		void syncThumbs(wallpaper.saved.map((w) => w.id));
 	});
 
 	async function onPick(e: Event) {

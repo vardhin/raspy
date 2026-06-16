@@ -473,7 +473,7 @@
 		<div class="grid">
 			{#each filtered as c (c.id)}
 				{@const av = avatarSrc(c)}
-				<button class="card" onclick={() => openView(c)}>
+				<button class="card u-surface u-interactive" onclick={() => openView(c)}>
 					<span class="avatar lg" class:has-photo={!!av}>
 						{#if av}<img src={av} alt="" />{:else}<span class="ini">{initials(c.name)}</span>{/if}
 						{#if c.images.length > 1}<span class="count">{c.images.length}</span>{/if}
@@ -758,6 +758,7 @@
 		grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 		gap: var(--space-3);
 	}
+	/* Surface chrome via global .u-surface .u-interactive (every concept applies). */
 	.card {
 		display: flex;
 		flex-direction: column;
@@ -765,21 +766,7 @@
 		gap: var(--space-2);
 		text-align: center;
 		padding: var(--space-4) var(--space-3);
-		border: var(--border-width) solid var(--border-color);
-		border-radius: var(--radius-lg);
-		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha, 1) * 100%), transparent);
-		color: var(--fg);
-		cursor: pointer;
 		font: inherit;
-		transition:
-			transform var(--motion-fast) var(--motion-ease),
-			box-shadow var(--motion-fast) var(--motion-ease),
-			border-color var(--motion-fast) var(--motion-ease);
-	}
-	.card:hover {
-		transform: translateY(-2px);
-		box-shadow: var(--shadow-md);
-		border-color: var(--accent);
 	}
 	.card-name {
 		display: inline-flex;

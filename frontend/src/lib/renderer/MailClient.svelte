@@ -700,6 +700,7 @@
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-lg);
 		background: color-mix(in srgb, var(--surface) 56%, transparent);
+		box-shadow: var(--shadow-sm);
 	}
 	.account-form :global(.field.inline) {
 		align-self: center;

@@ -338,6 +338,7 @@
 		background: color-mix(in srgb, var(--surface-2) 72%, transparent);
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-sm);
 	}
 	.account-head {
 		display: flex;
