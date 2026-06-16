@@ -5,7 +5,7 @@
 	// every screen is data from /api/manifest walked here.
 	import { getContext } from 'svelte';
 	import Self from './Node.svelte';
-	import { Surface, Stack, Text, Badge, Button, Field } from '$lib/components';
+	import { Surface, Stack, Text, Badge, Button, Field, Icon } from '$lib/components';
 	import FileManager from './FileManager.svelte';
 	import MailClient from './MailClient.svelte';
 	import SystemStats from './SystemStats.svelte';
@@ -101,12 +101,13 @@
 		onchange={(e: Event) => ctx.setField(node.name ?? '', (e.target as HTMLSelectElement).value)}
 	/>
 {:else if node.type === 'checkbox'}
-	<input
-		class="checkbox"
-		type="checkbox"
-		checked={!!(row && node.bind && row[node.bind])}
-		onchange={onCheckbox}
-	/>
+	{@const cbChecked = !!(row && node.bind && row[node.bind])}
+	<label class="checkbox">
+		<input type="checkbox" checked={cbChecked} onchange={onCheckbox} />
+		<span class="cb-box" aria-hidden="true">
+			{#if cbChecked}<Icon name="check" size={14} />{/if}
+		</span>
+	</label>
 {:else if node.type === 'button'}
 	<Button
 		variant={(node.variant as 'accent' | 'neutral' | 'ghost' | 'success' | 'warn' | 'danger') ??
@@ -182,9 +183,44 @@
 		width: 100%;
 	}
 	.checkbox {
-		width: 1.15rem;
-		height: 1.15rem;
-		accent-color: var(--accent);
+		display: inline-flex;
+		cursor: pointer;
+	}
+	.checkbox input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		margin: 0;
+		pointer-events: none;
+	}
+	.cb-box {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.2rem;
+		height: 1.2rem;
+		flex: none;
+		color: var(--accent-fg);
+		background: color-mix(
+			in srgb,
+			var(--surface-2) calc(var(--surface-alpha) * 100%),
+			transparent
+		);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-sm);
+		box-shadow: var(--shadow-sm);
+		transition:
+			background var(--motion-fast) var(--motion-ease),
+			border-color var(--motion-fast) var(--motion-ease);
+	}
+	.checkbox input:checked + .cb-box {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+	.checkbox input:focus-visible + .cb-box {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 	.table-scroll {
 		width: 100%;

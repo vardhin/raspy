@@ -3,7 +3,7 @@
 	import { apiUrl } from '$lib/api';
 	import { csrfToken } from '$lib/auth.svelte';
 	import { deriveAuthKey } from '$lib/crypto/kdf';
-	import { Badge, Button, Field, Icon, Stack, Surface, Text } from '$lib/components';
+	import { Badge, Button, Checkbox, Field, Icon, Stack, Surface, Text } from '$lib/components';
 
 	interface GrantableApp {
 		id: string;
@@ -190,15 +190,14 @@
 				<Field label="Account name" bind:value={createName} autocomplete="off" required />
 				<div class="checklist">
 					{#each apps as app (app.id)}
-						<label class="check">
-							<input
-								type="checkbox"
+						<div class="check">
+							<Checkbox
 								checked={createAllowed.includes(app.id)}
 								onchange={() => toggleCreate(app.id)}
 							/>
 							<Icon name={app.icon} size={16} />
 							<span>{app.title}</span>
-						</label>
+						</div>
 					{/each}
 				</div>
 				<Button type="submit" disabled={busy || !createName.trim()}>
@@ -252,15 +251,14 @@
 				{#if account.role === 'child'}
 					<div class="checklist">
 						{#each apps as app (app.id)}
-							<label class="check">
-								<input
-									type="checkbox"
+							<div class="check">
+								<Checkbox
 									checked={(drafts[account.username] ?? []).includes(app.id)}
 									onchange={() => toggleDraft(account.username, app.id)}
 								/>
 								<Icon name={app.icon} size={16} />
 								<span>{app.title}</span>
-							</label>
+							</div>
 						{/each}
 					</div>
 					<div class="row-actions">
@@ -307,12 +305,6 @@
 		border: var(--border-width) solid var(--border-color);
 		border-radius: var(--radius-md);
 		cursor: pointer;
-	}
-	.check input {
-		flex: none;
-		width: 1rem;
-		height: 1rem;
-		accent-color: var(--accent);
 	}
 	.check span {
 		min-width: 0;

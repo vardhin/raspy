@@ -9,18 +9,32 @@
 		     light→dark flash by seeding critical bg/fg via [data-mode] in app.css. -->
 		<script>
 			(function () {
+				var r = document.documentElement;
 				try {
 					var raw = localStorage.getItem('raspy.theme');
 					var c = raw ? JSON.parse(raw) : null;
-					var r = document.documentElement;
 					if (c && c.color) r.dataset.color = c.color;
 					if (c && c.concept) r.dataset.concept = c.concept;
-					// crude but flash-free: light theme ids carry "light" or "latte"
+					// crude but flash-free: light theme ids carry one of these tokens.
 					var id = (c && c.color) || '';
-					r.dataset.mode = /light|latte/.test(id) ? 'light' : 'dark';
+					r.dataset.mode = /light|latte|dawn|day|lotus|lighter/.test(id) ? 'light' : 'dark';
 				} catch (e) {
-					document.documentElement.dataset.mode = 'dark';
+					r.dataset.mode = 'dark';
 				}
+				// No-FOUC wallpaper: seed the scrim + flag (and a Vibe url, a stable
+				// same-origin path) before paint. Uploaded blobs resolve on hydration.
+				try {
+					var wraw = localStorage.getItem('raspy.wallpaper');
+					var w = wraw ? JSON.parse(wraw) : null;
+					if (w && w.kind && w.kind !== 'none') {
+						r.dataset.wallpaper = 'on';
+						r.style.setProperty('--wallpaper-dim', String(w.dim != null ? w.dim : 0.35));
+						r.style.setProperty('--wallpaper-blur', (w.blur || 0) + 'px');
+						if (w.kind === 'vibe' && w.ref) {
+							r.style.setProperty('--wallpaper', 'url("/api/att/vibe/image/' + w.ref + '")');
+						}
+					}
+				} catch (e) {}
 			})();
 		</script>
 		%sveltekit.head%

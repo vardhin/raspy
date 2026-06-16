@@ -1,6 +1,8 @@
 <script lang="ts">
 	// One form primitive covering text/number/textarea/select/checkbox. Label +
 	// control, all token-styled. `value` is bindable.
+	import Icon from './Icon.svelte';
+
 	type FieldType =
 		| 'text'
 		| 'number'
@@ -42,7 +44,12 @@
 			{/each}
 		</select>
 	{:else if type === 'checkbox'}
-		<input class="checkbox" type="checkbox" bind:checked={value as boolean} {...rest} />
+		<!-- Custom-drawn box (matches Checkbox.svelte) so concepts (radius/border/
+		     shadow) apply — native checkboxes can't be themed past accent-color. -->
+		<input class="cb-input" type="checkbox" bind:checked={value as boolean} {...rest} />
+		<span class="cb-box" aria-hidden="true">
+			{#if value}<Icon name="check" size={14} />{/if}
+		</span>
 	{:else}
 		<input class="control" {type} {placeholder} bind:value {...rest} />
 	{/if}
@@ -91,9 +98,42 @@
 		min-height: 5rem;
 		resize: vertical;
 	}
-	.checkbox {
-		width: 1.15rem;
-		height: 1.15rem;
-		accent-color: var(--accent);
+	/* Custom checkbox: hide the native input, draw a token-styled box so concepts
+	   (radius/border/shadow) apply. Mirrors Checkbox.svelte. */
+	.cb-input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		margin: 0;
+		pointer-events: none;
+	}
+	.cb-box {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.2rem;
+		height: 1.2rem;
+		flex: none;
+		color: var(--accent-fg);
+		background: color-mix(
+			in srgb,
+			var(--surface-2) calc(var(--surface-alpha) * 100%),
+			transparent
+		);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-sm);
+		box-shadow: var(--shadow-sm);
+		transition:
+			background var(--motion-fast) var(--motion-ease),
+			border-color var(--motion-fast) var(--motion-ease);
+	}
+	.cb-input:checked + .cb-box {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+	.cb-input:focus-visible + .cb-box {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 </style>

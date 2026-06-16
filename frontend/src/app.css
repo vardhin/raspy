@@ -50,6 +50,39 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
+/* Optional wallpaper: a fixed full-viewport image layer behind all content,
+   driven by the wallpaper store's :root vars (frontend-only, see
+   themes/wallpaper.svelte.ts). A scrim (--wallpaper-dim) keeps UI readable; the
+   page --bg shows through the scrim so themes still tint the backdrop. When no
+   wallpaper is set, --wallpaper is `none` and this layer is invisible. */
+:root[data-wallpaper='on'] body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	background-image: var(--wallpaper);
+	background-size: cover;
+	background-position: center;
+	background-repeat: no-repeat;
+	filter: blur(var(--wallpaper-blur, 0px));
+	transform: scale(1.05); /* hide blur edge bleed */
+}
+:root[data-wallpaper='on'] body::after {
+	content: '';
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	background: color-mix(
+		in srgb,
+		var(--bg) calc(var(--wallpaper-dim, 0.35) * 100%),
+		transparent
+	);
+}
+/* With a wallpaper active the page itself is transparent so the layers show. */
+:root[data-wallpaper='on'] body {
+	background: transparent;
+}
+
 /* Reduced-motion users get no transitions regardless of concept. */
 @media (prefers-reduced-motion: reduce) {
 	*,

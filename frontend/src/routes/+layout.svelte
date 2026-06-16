@@ -4,6 +4,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { theme } from '$lib/themes/store.svelte';
+	import { wallpaper } from '$lib/themes/wallpaper.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
@@ -67,6 +68,7 @@
 	// leaving the badge stuck on "connecting".
 	onMount(() => {
 		theme.init();
+		void wallpaper.init();
 		// Ask the server what to show (active / pin / password). Services start
 		// only once we reach 'active' (see the $effect above).
 		void auth.refresh();
