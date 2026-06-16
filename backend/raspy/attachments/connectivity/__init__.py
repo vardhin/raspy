@@ -70,6 +70,23 @@ class SshToggle(SudoBody):
     enable: bool = True
 
 
+class ExitNodeBody(SudoBody):
+    """Route this node's traffic through ``node`` (DNSName or IP), or clear the
+    exit node when ``node`` is empty/None."""
+
+    node: str | None = Field(default=None, max_length=256)
+
+
+class ExitNodeAdvertiseBody(SudoBody):
+    enable: bool = True
+
+
+class PingBody(BaseModel):
+    """Read-only diagnostic: ping a tailnet peer. No sudo (it doesn't need root)."""
+
+    target: str = Field(min_length=1, max_length=256)
+
+
 async def _run(
     cmd: list[str], timeout: float = 30.0, stdin: bytes | None = None
 ) -> tuple[int, str, str]:
@@ -135,7 +152,7 @@ class Connectivity(BaseAttachment):
     id = "connectivity"
     title = "Connectivity"
     icon = "globe"
-    version = "1.1.0"
+    version = "1.2.0"
 
     _cf_proc: asyncio.subprocess.Process | None = None
     _cf_hostname: str | None = None
@@ -261,6 +278,11 @@ class Connectivity(BaseAttachment):
             "hostname": None,
             "tailnet": None,
             "ssh": False,           # is this node advertising Tailscale SSH?
+            "exit_node": None,      # DNSName of the exit node we're routing through, if any
+            "advertising_exit_node": False,  # are WE offering to be an exit node?
+            "exit_nodes": [],       # available exit-node peers: [{name, online}]
+            "version": None,        # tailscale client version
+            "update_available": False,  # a newer tailscale client exists
             "install_url": "https://tailscale.com/download",
         }
         if not ts_bin:
@@ -299,6 +321,24 @@ class Connectivity(BaseAttachment):
         info["ssh"] = any("ssh" in str(c).lower() for c in caps) or any(
             "ssh" in str(k).lower() for k in cap_map
         )
+        # Are we offering ourselves as an exit node?
+        info["advertising_exit_node"] = bool(self_node.get("ExitNodeOption"))
+        # Client version + whether the daemon thinks a newer client exists.
+        info["version"] = data.get("Version")
+        cv = data.get("ClientVersion") or {}
+        # RunningLatest=True means up to date; absent/False means an update exists.
+        info["update_available"] = cv.get("RunningLatest") is False
+        # Peers: which one is the active exit node, and which can serve as one.
+        peers = (data.get("Peer") or {}).values()
+        exit_nodes: list[dict[str, Any]] = []
+        for p in peers:
+            if not p.get("ExitNodeOption"):
+                continue
+            name = (p.get("DNSName") or "").rstrip(".") or p.get("HostName")
+            exit_nodes.append({"name": name, "online": bool(p.get("Online"))})
+            if p.get("ExitNode"):
+                info["exit_node"] = name
+        info["exit_nodes"] = exit_nodes
         # Build access links: MagicDNS name first (friendliest), then each IP.
         links: list[dict[str, str]] = []
         if dns:
@@ -362,6 +402,8 @@ class Connectivity(BaseAttachment):
                          "connected": False, "ips": [], "magic_dns": None, "links": [],
                          "login_url": None, "login_name": None, "display_name": None,
                          "hostname": None, "tailnet": None, "ssh": False,
+                         "exit_node": None, "advertising_exit_node": False,
+                         "exit_nodes": [], "version": None, "update_available": False,
                          "install_url": "https://tailscale.com/download"}
 
         # Attach a ready-to-use link to every local address.
@@ -452,6 +494,50 @@ class Connectivity(BaseAttachment):
                 ["set", flag], "tailscale set --ssh failed", body.sudo_password
             )
 
+        @r.post("/tailscale/exit-node")
+        async def ts_exit_node(request: Request, body: ExitNodeBody) -> dict[str, Any]:
+            """Route this node's traffic through an exit node, or clear it. An empty
+            ``node`` clears (``set --exit-node=``)."""
+            _require_admin(request)
+            node = (body.node or "").strip()
+            return await self._ts_simple(
+                ["set", f"--exit-node={node}"],
+                "tailscale set --exit-node failed",
+                body.sudo_password,
+            )
+
+        @r.post("/tailscale/advertise-exit-node")
+        async def ts_advertise_exit(request: Request, body: ExitNodeAdvertiseBody) -> dict[str, Any]:
+            """Offer (or stop offering) this node as an exit node for the tailnet."""
+            _require_admin(request)
+            flag = "--advertise-exit-node" if body.enable else "--advertise-exit-node=false"
+            return await self._ts_simple(
+                ["set", flag], "tailscale set --advertise-exit-node failed", body.sudo_password
+            )
+
+        @r.post("/tailscale/update")
+        async def ts_update(request: Request, body: SudoBody | None = None) -> dict[str, Any]:
+            """Update the tailscale client to the latest version (tailscale update --yes)."""
+            _require_admin(request)
+            return await self._ts_simple(
+                ["update", "--yes"], "tailscale update failed",
+                (body or SudoBody()).sudo_password,
+            )
+
+        @r.post("/tailscale/netcheck")
+        async def ts_netcheck(request: Request) -> dict[str, Any]:
+            """Read-only network diagnostic (no root needed); returns the report text."""
+            _require_admin(request)
+            return await self._ts_diagnostic(["netcheck"], "tailscale netcheck failed")
+
+        @r.post("/tailscale/ping")
+        async def ts_ping(request: Request, body: PingBody) -> dict[str, Any]:
+            """Read-only: ping a tailnet peer (3 packets); returns the output text."""
+            _require_admin(request)
+            return await self._ts_diagnostic(
+                ["ping", "-c", "3", body.target.strip()], "tailscale ping failed"
+            )
+
         return r
 
     async def _ts_simple(
@@ -461,7 +547,7 @@ class Connectivity(BaseAttachment):
         Refuses cleanly when not installed; surfaces the real error otherwise.
 
         When the command fails because it needs root and no password was given,
-        return HTTP 401 with ``code: needs-root`` so the UI can prompt for the
+        return HTTP 428 with ``detail: needs-root`` so the UI can prompt for the
         sudo password and retry — rather than silently escalating (plan/56)."""
         ts_bin = self._tailscale_bin()
         if not ts_bin:
@@ -481,6 +567,19 @@ class Connectivity(BaseAttachment):
                 raise HTTPException(403, "wrong sudo password")
             raise HTTPException(400, detail[:500])
         return {"ok": True}
+
+    async def _ts_diagnostic(self, args: list[str], errmsg: str) -> dict[str, Any]:
+        """Run a read-only tailscale diagnostic (netcheck/ping) and return its text
+        output for the UI to display. These don't need root, so there's no sudo
+        path; a non-zero exit still surfaces the captured output."""
+        ts_bin = self._tailscale_bin()
+        if not ts_bin:
+            raise HTTPException(503, "tailscale is not installed on this machine")
+        code, out, err = await _run([ts_bin, *args], timeout=30)
+        text = (out + err).strip()
+        if code != 0 and not text:
+            raise HTTPException(400, errmsg)
+        return {"ok": code == 0, "output": text[:8000]}
 
     def ui(self) -> Any:
         return ui._node("connectivity", title="Connectivity")

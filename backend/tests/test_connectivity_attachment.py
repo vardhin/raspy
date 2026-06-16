@@ -64,10 +64,15 @@ def test_local_addresses_have_links(client, monkeypatch):
 def test_tailscale_actions_refuse_when_not_installed(client, monkeypatch):
     import raspy.attachments.connectivity as mod
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
-    for path in ("tailscale/up", "tailscale/down", "tailscale/logout"):
+    for path in ("tailscale/up", "tailscale/down", "tailscale/logout",
+                 "tailscale/update", "tailscale/netcheck"):
         r = client.post(f"/api/att/connectivity/{path}")
         assert r.status_code == 503, path
     r = client.post("/api/att/connectivity/tailscale/ssh", json={"enable": True})
+    assert r.status_code == 503
+    r = client.post("/api/att/connectivity/tailscale/exit-node", json={"node": "x"})
+    assert r.status_code == 503
+    r = client.post("/api/att/connectivity/tailscale/ping", json={"target": "x"})
     assert r.status_code == 503
 
 
@@ -122,6 +127,51 @@ def test_wrong_sudo_password_returns_403(client, monkeypatch):
     r = client.post("/api/att/connectivity/tailscale/down", json={"sudo_password": "nope"})
     assert r.status_code == 403
     assert "password" in r.json()["detail"].lower()
+
+
+def test_new_tailscale_actions_pass_expected_args(client, monkeypatch):
+    """Exit-node, advertise, update and the read-only diagnostics build the right
+    tailscale invocation and (for diagnostics) return captured text."""
+    import raspy.attachments.connectivity as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen: list[list[str]] = []
+
+    async def fake_run(cmd, timeout=30.0, stdin=None):
+        seen.append(cmd)
+        if cmd[1] == "netcheck":
+            return 0, "Report:\n\t* UDP: true\n", ""
+        if cmd[1] == "ping":
+            return 0, "pong via DERP\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    # Use an exit node, then clear it.
+    r = client.post("/api/att/connectivity/tailscale/exit-node", json={"node": "peer.ts.net"})
+    assert r.status_code == 200, r.text
+    assert seen[-1][1:] == ["set", "--exit-node=peer.ts.net"]
+    client.post("/api/att/connectivity/tailscale/exit-node", json={"node": ""})
+    assert seen[-1][1:] == ["set", "--exit-node="]
+
+    # Advertise / stop advertising as an exit node.
+    client.post("/api/att/connectivity/tailscale/advertise-exit-node", json={"enable": True})
+    assert seen[-1][1:] == ["set", "--advertise-exit-node"]
+    client.post("/api/att/connectivity/tailscale/advertise-exit-node", json={"enable": False})
+    assert seen[-1][1:] == ["set", "--advertise-exit-node=false"]
+
+    # Client self-update.
+    client.post("/api/att/connectivity/tailscale/update")
+    assert seen[-1][1:] == ["update", "--yes"]
+
+    # Read-only diagnostics return their text.
+    r = client.post("/api/att/connectivity/tailscale/netcheck")
+    assert r.status_code == 200
+    assert "UDP: true" in r.json()["output"]
+    r = client.post("/api/att/connectivity/tailscale/ping", json={"target": "peer.ts.net"})
+    assert r.status_code == 200
+    assert seen[-1][1:] == ["ping", "-c", "3", "peer.ts.net"]
+    assert "pong" in r.json()["output"]
 
 
 def test_cloudflare_up_requires_binary(client, monkeypatch):

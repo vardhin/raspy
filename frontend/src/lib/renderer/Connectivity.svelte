@@ -5,7 +5,7 @@
 	// link, and the Cloudflare tunnel — each as a copyable http://<addr>:<port> link.
 	import { onMount } from 'svelte';
 	import { attGet, attAction, type ApiError } from '$lib/api';
-	import { Badge, Button, Icon, Stack, Surface, SudoPrompt, Text } from '$lib/components';
+	import { Badge, Button, Field, Icon, Stack, Surface, SudoPrompt, Text } from '$lib/components';
 
 	interface LocalAddr {
 		ip: string;
@@ -35,6 +35,11 @@
 			hostname: string | null;
 			tailnet: string | null;
 			ssh: boolean;
+			exit_node: string | null;
+			advertising_exit_node: boolean;
+			exit_nodes: { name: string; online: boolean }[];
+			version: string | null;
+			update_available: boolean;
 			install_url: string;
 		};
 		cloudflare: {
@@ -174,6 +179,41 @@
 		privileged('ts-ssh', `tailscale set --ssh${enable ? '' : '=false'}`, (sudo_password) =>
 			attAction('connectivity', 'POST', 'tailscale/ssh', { enable, sudo_password })
 		);
+	let exitNodeChoice = $state('');
+	const tsExitNode = (node: string) =>
+		privileged('ts-exit-node', `tailscale set --exit-node=${node || '(clear)'}`, (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/exit-node', { node, sudo_password })
+		);
+	const tsAdvertiseExit = (enable: boolean) =>
+		privileged('ts-advertise-exit', `tailscale set --advertise-exit-node${enable ? '' : '=false'}`, (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/advertise-exit-node', { enable, sudo_password })
+		);
+	const tsUpdate = () =>
+		privileged('ts-update', 'tailscale update --yes', (sudo_password) =>
+			attAction('connectivity', 'POST', 'tailscale/update', { sudo_password })
+		);
+
+	// Read-only diagnostics — show their text output inline (no sudo).
+	let diag = $state<{ kind: string; text: string } | null>(null);
+	let pingTarget = $state('');
+	async function runDiag(kind: 'netcheck' | 'ping', body?: Record<string, unknown>) {
+		busy = `ts-${kind}`;
+		error = null;
+		diag = null;
+		try {
+			const r = await attAction<{ ok: boolean; output: string }>(
+				'connectivity',
+				'POST',
+				`tailscale/${kind}`,
+				body
+			);
+			diag = { kind, text: r.output || '(no output)' };
+		} catch (e) {
+			error = (e as ApiError)?.detail ?? (e as Error)?.message ?? 'diagnostic failed';
+		} finally {
+			busy = null;
+		}
+	}
 </script>
 
 {#snippet linkRow(label: string, url: string)}
@@ -253,6 +293,77 @@
 						{/if}
 						<Button size="sm" variant="warn" disabled={busy === 'ts-down'} onclick={tsDown}>Disconnect</Button>
 						<Button size="sm" variant="danger" disabled={busy === 'ts-logout'} onclick={tsLogout}>Log out</Button>
+							<!-- Exit node: route this box's traffic through a tailnet peer. -->
+						{#if status.tailscale.exit_nodes.length || status.tailscale.exit_node}
+							<div class="sub">
+								<Text role="label">Exit node</Text>
+								{#if status.tailscale.exit_node}
+									<Text role="muted">Routing through <b>{status.tailscale.exit_node}</b>.</Text>
+									<Button size="sm" variant="neutral" disabled={busy === 'ts-exit-node'} onclick={() => tsExitNode('')}>
+										Stop using exit node
+									</Button>
+								{:else}
+									<div class="row">
+										<Field
+											type="select"
+											bind:value={exitNodeChoice}
+											options={[
+												{ value: '', label: 'Select a peer…' },
+												...status.tailscale.exit_nodes.map((n) => ({
+													value: n.name,
+													label: n.online ? n.name : `${n.name} (offline)`
+												}))
+											]}
+										/>
+										<Button size="sm" variant="accent" disabled={!exitNodeChoice || busy === 'ts-exit-node'} onclick={() => tsExitNode(exitNodeChoice)}>
+											Use
+										</Button>
+									</div>
+								{/if}
+							</div>
+						{/if}
+
+						<!-- Advertise this node as an exit node for others. -->
+						<div class="row">
+							{#if status.tailscale.advertising_exit_node}
+								<Badge variant="info">offering exit node</Badge>
+								<Button size="sm" variant="neutral" disabled={busy === 'ts-advertise-exit'} onclick={() => tsAdvertiseExit(false)}>
+									Stop offering exit node
+								</Button>
+							{:else}
+								<Button size="sm" variant="neutral" disabled={busy === 'ts-advertise-exit'} onclick={() => tsAdvertiseExit(true)}>
+									Offer as exit node
+								</Button>
+							{/if}
+						</div>
+
+						<!-- Client version + self-update. -->
+						{#if status.tailscale.version}
+							<div class="row">
+								<Text role="muted">Client <code>{status.tailscale.version}</code></Text>
+								{#if status.tailscale.update_available}
+									<Badge variant="warn">update available</Badge>
+									<Button size="sm" variant="accent" disabled={busy === 'ts-update'} onclick={tsUpdate}>Update tailscale</Button>
+								{/if}
+							</div>
+						{/if}
+
+						<!-- Read-only diagnostics. -->
+						<div class="sub">
+							<Text role="label">Diagnostics</Text>
+							<div class="row">
+								<Button size="sm" variant="ghost" disabled={busy === 'ts-netcheck'} onclick={() => runDiag('netcheck')}>
+									{busy === 'ts-netcheck' ? 'Checking…' : 'Run netcheck'}
+								</Button>
+								<input class="in diag-target" type="text" placeholder="peer to ping (IP or name)" bind:value={pingTarget} />
+								<Button size="sm" variant="ghost" disabled={!pingTarget || busy === 'ts-ping'} onclick={() => runDiag('ping', { target: pingTarget })}>
+									{busy === 'ts-ping' ? 'Pinging…' : 'Ping'}
+								</Button>
+							</div>
+							{#if diag}
+								<pre class="diag-out">{diag.text}</pre>
+							{/if}
+						</div>
 					</div>
 				{:else}
 					{#if status.tailscale.login_url}
@@ -418,6 +529,31 @@
 	.err {
 		color: var(--danger, crimson);
 		font-size: 0.9rem;
+	}
+	/* A grouped sub-section inside the Tailscale card (exit node, diagnostics). */
+	.sub {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding-top: var(--space-2);
+		border-top: var(--border-width) solid var(--border-color);
+	}
+	.diag-target {
+		flex: 1;
+		min-width: 8rem;
+	}
+	.diag-out {
+		margin: 0;
+		max-height: 16rem;
+		overflow: auto;
+		padding: var(--space-2) var(--space-3);
+		background: color-mix(in srgb, var(--surface-2) calc(var(--surface-alpha) * 100%), transparent);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-md);
+		font-family: var(--font-mono, monospace);
+		font-size: 0.8rem;
+		white-space: pre-wrap;
+		word-break: break-word;
 	}
 	code {
 		font-family: var(--font-mono, monospace);

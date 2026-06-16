@@ -42,6 +42,21 @@ The link port is the spine's configured `settings.port`.
 - `tailscale/down` — disconnect (keeps the node key).
 - `tailscale/logout` — full logout (forgets the account/node key).
 - `tailscale/ssh` — enable/disable Tailscale SSH (`tailscale set --ssh[=false]`).
+- `tailscale/exit-node` — route this box's traffic through a tailnet peer, or
+  clear it (`set --exit-node=<name|ip>` / `--exit-node=`). The status object lists
+  the available exit-node peers + the active one.
+- `tailscale/advertise-exit-node` — offer/stop offering this node as an exit node
+  (`set --advertise-exit-node[=false]`).
+- `tailscale/update` — update the tailscale client (`update --yes`).
+- `tailscale/netcheck`, `tailscale/ping` — read-only diagnostics that return their
+  text output for the UI to show. No root, so no sudo prompt.
+
+The status object also reports the client `version`/`update_available`, the active
+`exit_node`, whether we're `advertising_exit_node`, and the list of `exit_nodes`.
+
+Every mutating Tailscale action above honours the sudo-password flow (see Security
+boundary): it runs unprivileged first and only escalates with an explicit,
+user-supplied password when the command reports it needs root.
 
 ## Edge cases (explicit)
 
