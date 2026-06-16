@@ -36,11 +36,7 @@ jobs:
             os_name: linux
             arch: arm64
             ext: ""
-          - runner: macos-13             # Intel mac
-            os_name: macos
-            arch: x64
-            ext: ""
-          - runner: macos-14             # Apple Silicon
+          - runner: macos-14             # Apple Silicon (Intel macs dropped — niche in 2026)
             os_name: macos
             arch: arm64
             ext: ""
