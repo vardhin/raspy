@@ -76,3 +76,68 @@ def test_pty_ws_refuses_without_channel(client):
 def test_kill_unknown_session_404(client):
     r = client.delete("/api/att/terminal/sessions/deadbeef")
     assert r.status_code == 404
+
+
+# --- a minimal channel client, mirroring the frontend crypto ------------------
+def _channel_handshake(client):
+    """Do a real channel handshake the way the frontend does, returning
+    (sid, key) so the test can seal/open frames exactly like the browser."""
+    import base64
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric.x25519 import (
+        X25519PrivateKey, X25519PublicKey,
+    )
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    def b64e(b):
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    def b64d(s):
+        return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    eph = X25519PrivateKey.generate()
+    eph_pub = eph.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    hs = client.post("/api/channel/handshake", json={"client_pub": b64e(eph_pub)}).json()
+    server_pub = b64d(hs["server_pub"])
+    shared = eph.exchange(X25519PublicKey.from_public_bytes(server_pub))
+    key = HKDF(
+        algorithm=hashes.SHA256(), length=32,
+        salt=eph_pub + server_pub, info=b"raspy-channel-v1",
+    ).derive(shared)
+    return hs["session_id"], key
+
+
+def test_pty_ws_sealed_open_roundtrip(client):
+    """End-to-end: a sealed `open` frame (wrapped exactly like the frontend sends
+    it) must reach the PTY and come back as a sealed `ready` — guarding against
+    the wrapper not being unwrapped before decrypt."""
+    import base64
+    import json
+    import os
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    sid, key = _channel_handshake(client)
+    aead = ChaCha20Poly1305(key)
+
+    def seal(obj) -> str:
+        nonce = os.urandom(12)
+        ct = aead.encrypt(nonce, json.dumps(obj).encode(), None)
+        payload = base64.urlsafe_b64encode(nonce + ct).rstrip(b"=").decode()
+        return json.dumps({"type": "sealed", "payload": payload})
+
+    def open_frame(raw) -> dict:
+        frame = json.loads(raw)
+        assert frame["type"] == "sealed"
+        blob = base64.urlsafe_b64decode(frame["payload"] + "=" * (-len(frame["payload"]) % 4))
+        return json.loads(aead.decrypt(blob[:12], blob[12:], None).decode())
+
+    with client.websocket_connect(f"/api/att/terminal/pty?channel={sid}") as ws:
+        ws.send_text(seal({"t": "open", "cols": 80, "rows": 24}))
+        msg = open_frame(ws.receive_text())
+        # The fix: this is "ready", NOT {"t":"error","msg":"decrypt failed"}.
+        assert msg["t"] == "ready", msg
+        assert "sid" in msg
+        # Clean up the spawned PTY.
+        ws.send_text(seal({"t": "input", "data": "exit\n"}))

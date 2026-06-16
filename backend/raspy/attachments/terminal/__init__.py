@@ -307,7 +307,13 @@ class Terminal(BaseAttachment):
             while True:
                 raw = await ws.receive_text()
                 try:
-                    msg = json.loads(channel.open(sid, raw).decode())
+                    # Client frames are {"type":"sealed","payload":"<b64 nonce||ct>"};
+                    # unwrap to the sealed payload before opening it.
+                    frame = json.loads(raw)
+                    payload = frame.get("payload") if isinstance(frame, dict) else None
+                    if not payload:
+                        raise ValueError("not a sealed frame")
+                    msg = json.loads(channel.open(sid, payload).decode())
                 except Exception:
                     await _send(ws, channel, sid, {"t": "error", "msg": "decrypt failed"})
                     continue
