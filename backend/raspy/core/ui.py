@@ -229,6 +229,20 @@ def contacts(*, title: str | None = None) -> UINode:
     return _node("contacts", title=title)
 
 
+def notes(*, title: str | None = None) -> UINode:
+    """The notes UI — a list of markdown notes opening into a code-editor-style
+    full editor.
+
+    The backend stores each note's plaintext ``title`` and ``body`` (markdown) via
+    ``GET/POST/PATCH/DELETE /api/att/notes/notes``. The shell component ships the
+    whole experience: a card list, a "New note" button, an Edit button per note,
+    and an editor view with a monospace text pane, a live markdown preview
+    (pretext-laid-out), an editable editor font, line-wrap and line-number toggles,
+    and a live word count. One composite Tier-1 node, no shipped client code.
+    """
+    return _node("notes", title=title)
+
+
 def accounts(*, title: str | None = None) -> UINode:
     """The admin-only account management UI. The shell component lists child
     accounts, creates them (username + temp password/PIN + per-app checklist),

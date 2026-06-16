@@ -60,7 +60,7 @@
 				{#if connection.version}
 					<Badge variant="info">v{connection.version}</Badge>
 				{/if}
-				<Badge>{connection.attachmentCount} apps</Badge>
+				<Badge>{manifest.attachments.length} apps</Badge>
 				{#if connection.erroredCount}
 					<Badge variant="danger">{connection.erroredCount} failed</Badge>
 				{/if}
@@ -137,7 +137,6 @@
 							<span class="ico"><Icon name={app.icon} size={22} /></span>
 							<Stack gap={1}>
 								<Text role="label">{app.title}</Text>
-								<Text role="muted">v{app.version}</Text>
 							</Stack>
 						</Stack>
 					</Surface>

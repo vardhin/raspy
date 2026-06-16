@@ -114,60 +114,10 @@ class Notes(BaseAttachment):
         return r
 
     def ui(self) -> dict[str, Any]:
-        return ui.view(
-            title="Notes",
-            children=[
-                ui.surface(
-                    level=2,
-                    children=[
-                        ui.stack(
-                            children=[
-                                ui.input("title", label="Title", placeholder="Note title"),
-                                ui.input(
-                                    "body",
-                                    label="Body",
-                                    placeholder="Write something…",
-                                    kind="textarea",
-                                ),
-                                ui.button(
-                                    "Save note",
-                                    action=ui.post(
-                                        "notes", body={"title": "$title", "body": "$body"}
-                                    ),
-                                ),
-                            ]
-                        )
-                    ],
-                ),
-                ui.list_(
-                    source="notes",
-                    key="id",
-                    empty="No notes yet.",
-                    item=ui.surface(
-                        children=[
-                            ui.stack(
-                                gap=1,
-                                children=[
-                                    ui.row(
-                                        justify="between",
-                                        align="center",
-                                        children=[
-                                            ui.text("", bind="title", role="heading"),
-                                            ui.button(
-                                                "Delete",
-                                                variant="danger",
-                                                action=ui.delete("notes/{id}"),
-                                            ),
-                                        ],
-                                    ),
-                                    ui.text("", bind="body", role="muted"),
-                                ],
-                            )
-                        ],
-                    ),
-                ),
-            ],
-        )
+        # One dedicated Tier-1 node: the shell ships the full notes experience
+        # (list + code-editor-style editor with markdown preview). The REST
+        # endpoints above are the whole contract.
+        return ui.notes(title="Notes")
 
 
 attachment = Notes()

@@ -122,7 +122,7 @@
 			<span class="account-role">{auth.role === 'admin' ? 'Admin' : 'Child'}</span>
 		</button>
 		{#if connection.version}
-			<div class="meta">v{connection.version} · {connection.attachmentCount} apps</div>
+			<div class="meta">v{connection.version} · {manifest.attachments.length} apps</div>
 		{/if}
 		<details class="disclosure push {notifications.pushStatus}">
 			<summary>
