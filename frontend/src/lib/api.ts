@@ -84,7 +84,9 @@ function bypassChannel(url: string): boolean {
 		url.includes('/api/att/vault/') ||
 		// Calendar photo blobs are E2E-encrypted ciphertext that streams — same as
 		// the vault, no point double-wrapping them through the channel.
-		url.includes('/api/att/calendar/image/')
+		url.includes('/api/att/calendar/image/') ||
+		// Contact photo blobs are E2E-encrypted ciphertext too — same as the above.
+		url.includes('/api/att/contacts/image/')
 	);
 }
 

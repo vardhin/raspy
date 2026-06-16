@@ -63,6 +63,7 @@ raspy/
 `-- attachments/        # built-in attachments (auto-discovered)
     |-- accounts/       # account management
     |-- calendar/       # calendar entries + reminders + encrypted media
+    |-- contacts/       # address book + keep-in-touch list + encrypted photos
     |-- files/          # confined file manager
     |-- mail/           # IMAP polling client
     |-- notes/          # quick notes

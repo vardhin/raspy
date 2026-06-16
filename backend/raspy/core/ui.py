@@ -215,6 +215,20 @@ def vault(*, title: str | None = None) -> UINode:
     return _node("vault", title=title)
 
 
+def contacts(*, title: str | None = None) -> UINode:
+    """The contacts UI — a personal address book + a "keep in touch" reminder list.
+
+    The backend stores each contact's plaintext fields (name, description, phone,
+    email, address) plus any number of end-to-end-encrypted photos (the same
+    zero-knowledge scheme as ``calendar``/``vault``: opaque ciphertext blobs +
+    per-image keys wrapped under the master key). The shell component ships a
+    topbar with two views — a default "Keep in touch" accordion of names and a
+    full "All contacts" directory — reading ``GET /api/att/contacts/contacts`` and
+    decrypting photos on view. One composite Tier-1 node, no shipped client code.
+    """
+    return _node("contacts", title=title)
+
+
 def accounts(*, title: str | None = None) -> UINode:
     """The admin-only account management UI. The shell component lists child
     accounts, creates them (username + temp password/PIN + per-app checklist),

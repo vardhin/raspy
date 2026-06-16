@@ -19,7 +19,7 @@ see, and talks back to each app under `/api/att/<id>/`.
 - `plan/` - architecture notes and roadmap.
 
 Built-in attachments currently include accounts, todo, notes, notifications,
-files, system stats, mail, calendar, vault, and vibe-of-the-day. The exact list
+files, system stats, mail, calendar, contacts, vault, and vibe-of-the-day. The exact list
 is discovered at startup and filtered per account in `/api/manifest`.
 
 ## Current shape
