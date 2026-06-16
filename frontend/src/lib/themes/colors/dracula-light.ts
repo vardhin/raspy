@@ -1,28 +1,29 @@
 import type { ColorTheme } from '../types';
 
-// Alucard — the official light counterpart of Dracula.
+// Alucard — Dracula's official light theme. Warm cream paper with the Dracula
+// purple/pink/green accents darkened for contrast on light.
 // https://draculatheme.com/alucard
 export default {
 	id: 'dracula-light',
-	name: 'Dracula (Light)',
+	name: 'Alucard (Dracula Light)',
 	mode: 'light',
 	tokens: {
-		'--bg': '#f8f8f2',
-		'--surface': '#ffffff',
-		'--surface-2': '#ececed',
-		'--fg': '#1f1f1f',
-		'--muted': '#6c664b',
-		'--border-color': '#cfcfc2',
-		'--accent': '#7544c0',
-		'--accent-fg': '#ffffff',
-		'--success': '#14710a',
-		'--success-fg': '#ffffff',
-		'--warn': '#846e15',
-		'--warn-fg': '#ffffff',
-		'--danger': '#cb3a2a',
-		'--danger-fg': '#ffffff',
-		'--info': '#036a96',
-		'--info-fg': '#ffffff',
-		'--overlay': 'rgba(31, 31, 31, 0.35)'
+		'--bg': '#fffbeb', // alucard background
+		'--surface': '#f5f1e0', // current line
+		'--surface-2': '#efead3',
+		'--fg': '#1f1f1f', // foreground
+		'--muted': '#6c664b', // comment
+		'--border-color': '#dcd7c0',
+		'--accent': '#644ac9', // purple
+		'--accent-fg': '#fffbeb',
+		'--success': '#14710a', // green
+		'--success-fg': '#fffbeb',
+		'--warn': '#846e15', // yellow
+		'--warn-fg': '#fffbeb',
+		'--danger': '#cb3a2a', // red
+		'--danger-fg': '#fffbeb',
+		'--info': '#036a96', // cyan
+		'--info-fg': '#fffbeb',
+		'--overlay': 'rgba(31, 31, 31, 0.28)'
 	}
 } satisfies ColorTheme;

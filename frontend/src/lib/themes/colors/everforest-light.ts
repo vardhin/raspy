@@ -1,27 +1,28 @@
 import type { ColorTheme } from '../types';
 
-// Everforest Light (medium). https://github.com/sainnhe/everforest
+// Everforest Light (medium) — warm green-tinted paper, soft earthy accents.
+// https://github.com/sainnhe/everforest
 export default {
 	id: 'everforest-light',
 	name: 'Everforest (Light)',
 	mode: 'light',
 	tokens: {
-		'--bg': '#fdf6e3',
-		'--surface': '#f4f0d9',
-		'--surface-2': '#efebd4',
-		'--fg': '#5c6a72',
-		'--muted': '#939f91',
-		'--border-color': '#e0dcc7',
-		'--accent': '#8da101',
+		'--bg': '#fdf6e3', // bg0
+		'--surface': '#f4f0d9', // bg1
+		'--surface-2': '#efebd4', // bg2
+		'--fg': '#5c6a72', // fg
+		'--muted': '#829181', // grey1
+		'--border-color': '#ddd8be', // bg4
+		'--accent': '#8da101', // green
 		'--accent-fg': '#fdf6e3',
-		'--success': '#35a77c',
+		'--success': '#35a77c', // aqua
 		'--success-fg': '#fdf6e3',
-		'--warn': '#dfa000',
+		'--warn': '#dfa000', // yellow
 		'--warn-fg': '#fdf6e3',
-		'--danger': '#f85552',
+		'--danger': '#f85552', // red
 		'--danger-fg': '#fdf6e3',
-		'--info': '#3a94c5',
+		'--info': '#3a94c5', // blue
 		'--info-fg': '#fdf6e3',
-		'--overlay': 'rgba(92, 106, 114, 0.3)'
+		'--overlay': 'rgba(92, 106, 114, 0.28)'
 	}
 } satisfies ColorTheme;

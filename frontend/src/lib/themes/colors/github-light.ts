@@ -1,6 +1,7 @@
 import type { ColorTheme } from '../types';
 
-// GitHub Light (default). https://github.com/primer/github-vscode-theme
+// GitHub Light (default). Crisp neutral grey UI with GitHub's blue accent.
+// https://github.com/primer/github-vscode-theme
 export default {
 	id: 'github-light',
 	name: 'GitHub Light',
@@ -22,6 +23,6 @@ export default {
 		'--danger-fg': '#ffffff',
 		'--info': '#0550ae',
 		'--info-fg': '#ffffff',
-		'--overlay': 'rgba(31, 35, 40, 0.3)'
+		'--overlay': 'rgba(31, 35, 40, 0.28)'
 	}
 } satisfies ColorTheme;
