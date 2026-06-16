@@ -10,8 +10,13 @@
 	import { Surface, Stack, Text, Field, Button } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 
-	// Start on the PIN screen only when a local wrapped key exists to unwrap.
-	let mode = $state<'pin' | 'password'>(auth.hasLocalPin ? 'pin' : 'password');
+	// Start on the PIN screen when a local wrapped key exists to unwrap. The check
+	// (hasWrappedMasterKey) is async, so auth.hasLocalPin can still be false at
+	// mount and flip to true a tick later — if we snapshot it once we'd wrongly
+	// stick on the password form. Track whether the user has explicitly chosen a
+	// mode; until they do, follow auth.hasLocalPin reactively.
+	let chosen = $state<'pin' | 'password' | null>(null);
+	const mode = $derived(chosen ?? (auth.hasLocalPin ? 'pin' : 'password'));
 
 	let pin = $state('');
 	let password = $state('');
@@ -32,11 +37,11 @@
 
 	function toPassword() {
 		auth.error = null;
-		mode = 'password';
+		chosen = 'password';
 	}
 	function toPin() {
 		auth.error = null;
-		mode = 'pin';
+		chosen = 'pin';
 	}
 </script>
 

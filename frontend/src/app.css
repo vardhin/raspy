@@ -20,11 +20,21 @@
 	color-scheme: light;
 }
 
-/* Terminal concept swaps to a monospace stack (can't be a token). */
-:root[data-concept='terminal'] {
+/* Concepts that ride a monospace stack (can't be expressed as a token). */
+:root[data-concept='terminal'],
+:root[data-concept='mono'],
+:root[data-concept='pixel'] {
 	font-family:
 		ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas,
 		monospace;
+}
+
+/* Wireframe concept draws every token-driven border as a dashed sketch line.
+   Tokens can't express border-style, so it's a thin structural hook. */
+:root[data-concept='wireframe'] *,
+:root[data-concept='wireframe'] *::before,
+:root[data-concept='wireframe'] *::after {
+	border-style: dashed !important;
 }
 
 *,

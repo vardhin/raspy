@@ -7,7 +7,6 @@
 	import Badge from './Badge.svelte';
 	import Button from './Button.svelte';
 	import Modal from './Modal.svelte';
-	import ThemePicker from './ThemePicker.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { notifications, type PushStatus } from '$lib/notifications/store.svelte';
@@ -89,6 +88,10 @@
 			<Icon name="home" />
 			<span>Dashboard</span>
 		</a>
+		<a class="item" class:active={active('/theme')} href="/theme" onclick={onClose}>
+			<Icon name="sparkles" />
+			<span>Theme</span>
+		</a>
 
 		<div class="section-label">Apps</div>
 
@@ -150,11 +153,6 @@
 					</button>
 				{/if}
 			</div>
-		</details>
-
-		<details class="disclosure theme">
-			<summary><span class="disclosure-label">Theme</span></summary>
-			<div class="disclosure-body"><ThemePicker /></div>
 		</details>
 	</div>
 </aside>

@@ -87,13 +87,15 @@ class Auth {
 			if (data.authenticated && data.needs === 'none') {
 				this.username = data.username ?? null;
 				this.role = data.role ?? null;
-				this.state = 'active';
 				// The session survived but the in-memory master key may not have
-				// (e.g. a page reload). If so, `locked` is now true; tell the gate
-				// whether it can offer the fast PIN unlock.
+				// (e.g. a page reload). If so, `locked` becomes true once we go
+				// active; resolve whether the gate can offer the fast PIN unlock
+				// BEFORE flipping state, so LockGate doesn't mount with a stale
+				// hasLocalPin=false and wrongly default to the password form.
 				if (this.#masterKey === null) {
 					this.hasLocalPin = await hasWrappedMasterKey();
 				}
+				this.state = 'active';
 			} else if (data.authenticated && data.needs === 'reset') {
 				this.username = data.username ?? null;
 				this.role = data.role ?? 'child';
