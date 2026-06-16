@@ -3,7 +3,7 @@
 	// confined filesystem via its conventional endpoints (list/download/preview/
 	// upload/mkdir/rename/move/delete). Token-only styling, so it re-skins with any
 	// theme. Live: refreshes on the attachment's `files.changed` events.
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { Surface, Stack, Text, Button, Icon, Field, Modal } from '$lib/components';
 	import { connection } from '$lib/connection.svelte';
 	import {
@@ -20,7 +20,7 @@
 	let { node }: { node: UINode } = $props();
 	const ctx = getContext<RenderContext>('render');
 	const att = ctx.attachmentId;
-	const listPath = node.list_source ?? 'list';
+	const listPath = untrack(() => node.list_source) ?? 'list';
 
 	interface Entry {
 		name: string;

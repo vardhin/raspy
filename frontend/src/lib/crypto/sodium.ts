@@ -2,19 +2,26 @@
 // crypto_pwhash (Argon2id), which the standard build omits and which we need for
 // the password KDF. All crypto in the app funnels through this single ready()
 // so we initialize the WASM exactly once.
+//
+// The library is ~500 kB, so we pull it in via a dynamic import(): it lands in
+// its own chunk that the bundler loads only on first crypto use, keeping it out
+// of the initial page payload. The default import is type-only (erased at build).
 
-import _sodium from 'libsodium-wrappers-sumo';
+import type _sodium from 'libsodium-wrappers-sumo';
 
-let ready: Promise<typeof _sodium> | null = null;
+export type Sodium = typeof _sodium;
 
-export function sodiumReady(): Promise<typeof _sodium> {
+let ready: Promise<Sodium> | null = null;
+
+export function sodiumReady(): Promise<Sodium> {
 	if (!ready) {
-		ready = _sodium.ready.then(() => _sodium);
+		ready = import('libsodium-wrappers-sumo').then((m) => {
+			const s = m.default;
+			return s.ready.then(() => s);
+		});
 	}
 	return ready;
 }
-
-export type Sodium = typeof _sodium;
 
 // --- small base64url helpers (URL-safe, unpadded — matches the backend) ------
 

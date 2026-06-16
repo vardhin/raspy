@@ -2,7 +2,7 @@
 	// Mounts one attachment's declarative UI. Creates a RenderContext, walks the
 	// tree to discover every `list`/`table` data source and loads them, then renders
 	// the node tree. Re-keys on attachment id so switching apps fully resets state.
-	import { setContext, onDestroy } from 'svelte';
+	import { setContext, onDestroy, untrack } from 'svelte';
 	import Node from './Node.svelte';
 	import { RenderContext } from './context.svelte';
 	import { Text, Stack, Badge } from '$lib/components';
@@ -10,7 +10,7 @@
 
 	let { app }: { app: AttachmentManifest } = $props();
 
-	const ctx = new RenderContext(app.id);
+	const ctx = new RenderContext(untrack(() => app.id));
 	setContext('render', ctx);
 
 	function collectSources(node: UINode | null | undefined, out: Set<string>): void {

@@ -16,5 +16,13 @@ export default defineConfig({
 			// for /a/[name] attachment views. See plan/40-frontend.md.
 			adapter: adapter({ fallback: 'index.html' })
 		})
-	]
+	],
+
+	build: {
+		// libsodium-wrappers-sumo (Argon2id WASM) is ~530 kB and now lives in its
+		// own lazily-loaded chunk (see src/lib/crypto/sodium.ts). It loads only on
+		// first crypto use, so the size is acceptable; bump the warning limit past
+		// it so the threshold still catches genuinely unexpected large chunks.
+		chunkSizeWarningLimit: 600
+	}
 });
