@@ -30,9 +30,37 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .auth.scope import account_slug, current_account, current_account_legacy
 from .db import Database
 
 log = logging.getLogger("raspy.notifications")
+
+# The owner key stored on every notification / subscription, so each account only
+# sees its own. The original admin keeps the legacy unsuffixed scope (sentinel
+# below) to match its pre-isolation storage; children get their ``account_slug``.
+# A row written before isolation (or by a background task with no account context)
+# also lands on the legacy owner, so the admin still sees historical notifications.
+_LEGACY_OWNER = "_admin"
+
+
+def owner_key(username: str | None, *, is_admin: bool) -> str:
+    """The account key a notification is stored/filtered under. Admin (and any
+    contextless/background write) → the legacy sentinel; a child → its slug. The
+    WS endpoint uses this with the connected account to filter the live feed, so
+    it must match :func:`_current_owner` exactly."""
+    if username is None or is_admin:
+        return _LEGACY_OWNER
+    return account_slug(username)
+
+
+def _current_owner() -> str:
+    """The account key for whoever is in scope right now. Mirrors how ScopedDB /
+    data dirs resolve the current account (see core/auth/scope.py): admin/legacy
+    → the sentinel, a child → its slug. Read at call time from the ContextVars the
+    auth gate and the background pollers set."""
+    return owner_key(
+        current_account.get(), is_admin=current_account_legacy.get()
+    )
 
 # Core tables are prefixed ``core_`` to stay clear of attachment ``att_*`` tables.
 _T_NOTES = "core_notifications"
@@ -94,6 +122,7 @@ class NotificationService:
             f"""
             CREATE TABLE IF NOT EXISTS {_T_NOTES} (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                account   TEXT    NOT NULL DEFAULT '{_LEGACY_OWNER}',
                 source    TEXT    NOT NULL DEFAULT 'core',
                 title     TEXT    NOT NULL,
                 body      TEXT    NOT NULL DEFAULT '',
@@ -109,6 +138,7 @@ class NotificationService:
             f"""
             CREATE TABLE IF NOT EXISTS {_T_SUBS} (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                account   TEXT    NOT NULL DEFAULT '{_LEGACY_OWNER}',
                 kind      TEXT    NOT NULL DEFAULT 'webpush',
                 endpoint  TEXT    NOT NULL UNIQUE,
                 keys      TEXT    NOT NULL DEFAULT '{{}}',
@@ -137,6 +167,20 @@ class NotificationService:
             f"CREATE INDEX IF NOT EXISTS {_T_OUTBOX}_due "
             f"ON {_T_OUTBOX} (status, next_attempt)"
         )
+        await self._migrate_account_columns()
+
+    async def _migrate_account_columns(self) -> None:
+        """Add the ``account`` owner column to notification/subscription tables
+        created before per-account isolation existed. SQLite has no ``ADD COLUMN
+        IF NOT EXISTS``, so introspect and add what's missing. Existing rows keep
+        the default (legacy/admin owner), so the admin still sees its history."""
+        for table in (_T_NOTES, _T_SUBS):
+            rows = await self._db.fetch_all(f"PRAGMA table_info({table})")
+            if not any(r["name"] == "account" for r in rows):
+                await self._db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN account "
+                    f"TEXT NOT NULL DEFAULT '{_LEGACY_OWNER}'"
+                )
 
     # --- worker lifecycle ----------------------------------------------------
 
@@ -172,12 +216,18 @@ class NotificationService:
         url: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record + deliver a notification through every available channel."""
+        """Record + deliver a notification through every available channel.
+
+        Scoped to the account in context: it's stored under that owner, only
+        delivered live to that account's connected clients, and only pushed to
+        that account's subscriptions. So a child's notification never reaches the
+        admin (or another child), and vice-versa."""
         now = time.time()
+        owner = _current_owner()
         note_id = await self._db.execute_insert(
-            f"INSERT INTO {_T_NOTES} (source, title, body, icon, url, data, read, created) "
-            f"VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
-            (source, title, body, icon, url, json.dumps(data) if data else None, now),
+            f"INSERT INTO {_T_NOTES} (account, source, title, body, icon, url, data, read, created) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (owner, source, title, body, icon, url, json.dumps(data) if data else None, now),
         )
         note = {
             "id": note_id,
@@ -190,16 +240,19 @@ class NotificationService:
             "read": False,
             "created": now,
         }
-        # 1. Foreground: live to any connected client over the WS.
+        # 1. Foreground: live to this account's connected clients over the WS.
+        #    The "account" field is the delivery filter the WS endpoint applies;
+        #    it is not part of the persisted/public note shape.
         #    - "notification.new" drives the global handler (OS popup + bell).
         #    - "notifications.changed" matches the notifications app's id prefix
         #      so an open /a/notifications view re-pulls its history live.
-        self._events.publish("notification.new", note)
-        self._events.publish("notifications.changed", {"id": note_id})
-        # 2. Background: enqueue one durable outbox row per subscription. The
-        #    drain worker delivers them with retries — so a notification raised
-        #    while the push service (or the Pi) is momentarily down is not lost.
-        await self._enqueue_push(note)
+        self._events.publish("notification.new", {**note, "account": owner})
+        self._events.publish("notifications.changed", {"id": note_id, "account": owner})
+        # 2. Background: enqueue one durable outbox row per subscription owned by
+        #    this account. The drain worker delivers them with retries — so a
+        #    notification raised while the push service (or Pi) is momentarily
+        #    down is not lost.
+        await self._enqueue_push(note, owner)
         return note
 
     def notify_later(self, delay: float, title: str, body: str = "", **kwargs: Any) -> None:
@@ -221,38 +274,58 @@ class NotificationService:
     # --- history -------------------------------------------------------------
 
     async def list(self, limit: int = 50) -> list[dict[str, Any]]:
+        owner = _current_owner()
         rows = await self._db.fetch_all(
-            f"SELECT * FROM {_T_NOTES} ORDER BY created DESC LIMIT ?", (limit,)
+            f"SELECT * FROM {_T_NOTES} WHERE account = ? ORDER BY created DESC LIMIT ?",
+            (owner, limit),
         )
         return [_note_to_api(r) for r in rows]
 
     async def unread_count(self) -> int:
+        owner = _current_owner()
         row = await self._db.fetch_one(
-            f"SELECT COUNT(*) AS n FROM {_T_NOTES} WHERE read = 0"
+            f"SELECT COUNT(*) AS n FROM {_T_NOTES} WHERE account = ? AND read = 0",
+            (owner,),
         )
         return int((row or {}).get("n", 0))
 
     async def mark_read(self, note_id: int) -> None:
+        # Scope by owner so an account can't read/clear another's notifications by
+        # guessing ids — the global notifications router is shared across accounts.
         await self._db.execute(
-            f"UPDATE {_T_NOTES} SET read = 1 WHERE id = ?", (note_id,)
+            f"UPDATE {_T_NOTES} SET read = 1 WHERE id = ? AND account = ?",
+            (note_id, _current_owner()),
         )
 
     async def mark_all_read(self) -> None:
-        await self._db.execute(f"UPDATE {_T_NOTES} SET read = 1 WHERE read = 0")
+        await self._db.execute(
+            f"UPDATE {_T_NOTES} SET read = 1 WHERE read = 0 AND account = ?",
+            (_current_owner(),),
+        )
 
     async def delete(self, note_id: int) -> None:
-        await self._db.execute(f"DELETE FROM {_T_NOTES} WHERE id = ?", (note_id,))
+        await self._db.execute(
+            f"DELETE FROM {_T_NOTES} WHERE id = ? AND account = ?",
+            (note_id, _current_owner()),
+        )
 
     async def clear(self) -> None:
-        await self._db.execute(f"DELETE FROM {_T_NOTES}")
+        await self._db.execute(
+            f"DELETE FROM {_T_NOTES} WHERE account = ?", (_current_owner(),)
+        )
 
     # --- subscriptions -------------------------------------------------------
 
     async def add_subscription(self, sub: PushSubscribe) -> None:
+        # Stamp the owner so background push only reaches this account's devices.
+        # On re-subscribe (same endpoint) the owner is reasserted too, in case the
+        # same browser/device was handed to a different account.
+        owner = _current_owner()
         await self._db.execute(
-            f"INSERT INTO {_T_SUBS} (kind, endpoint, keys, created) VALUES (?, ?, ?, ?) "
-            f"ON CONFLICT(endpoint) DO UPDATE SET kind = excluded.kind, keys = excluded.keys",
-            (sub.kind, sub.endpoint, json.dumps(sub.keys), time.time()),
+            f"INSERT INTO {_T_SUBS} (account, kind, endpoint, keys, created) VALUES (?, ?, ?, ?, ?) "
+            f"ON CONFLICT(endpoint) DO UPDATE SET "
+            f"account = excluded.account, kind = excluded.kind, keys = excluded.keys",
+            (owner, sub.kind, sub.endpoint, json.dumps(sub.keys), time.time()),
         )
 
     async def remove_subscription(self, endpoint: str) -> None:
@@ -262,9 +335,12 @@ class NotificationService:
 
     # --- push delivery (durable outbox) -------------------------------------
 
-    async def _enqueue_push(self, note: dict[str, Any]) -> None:
-        """Write one outbox row per current subscription, then poke the worker."""
-        subs = await self._db.fetch_all(f"SELECT * FROM {_T_SUBS}")
+    async def _enqueue_push(self, note: dict[str, Any], owner: str) -> None:
+        """Write one outbox row per subscription owned by ``owner``, then poke the
+        worker. Only this account's devices get the background push."""
+        subs = await self._db.fetch_all(
+            f"SELECT * FROM {_T_SUBS} WHERE account = ?", (owner,)
+        )
         if not subs:
             return
         payload = json.dumps(

@@ -7,7 +7,7 @@
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
-	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup } from '$lib/components';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { setAuthLostHandler } from '$lib/api';
 
@@ -111,6 +111,10 @@
 	<PinUnlock />
 {:else if auth.state === 'reset'}
 	<AccountSetup />
+{:else if auth.locked}
+	<!-- Session is valid but the vault master key is missing (e.g. a reload
+	     dropped the in-memory key). PIN-first unlock, password fallback. -->
+	<LockGate />
 {:else}
 <div class="shell" class:drawer-open={drawerOpen}>
 	<!-- Mobile-only top bar with the hamburger. Hidden at desktop widths. -->

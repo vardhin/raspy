@@ -48,6 +48,15 @@ async def ws_endpoint(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
+    # Which account is this socket? Notifications are per-account, so we only
+    # forward notification events whose owner matches — otherwise a child's tab
+    # would receive the admin's notifications and vice-versa (the bus broadcasts
+    # every event to every subscriber). The key must match how notify() stamps
+    # the owner (see notifications.owner_key).
+    from .notifications import owner_key
+
+    my_owner = owner_key(claims.get("sub"), is_admin=(claims.get("role") == "admin"))
+
     await ws.accept()
     bus = ws.app.state.events
 
@@ -66,11 +75,23 @@ async def ws_endpoint(ws: WebSocket) -> None:
             return message
         return {"type": "sealed", "payload": channel.seal(sid, _json.dumps(message).encode())}
 
+    def _for_me(event) -> bool:
+        """Notification events are owner-tagged; drop the ones not for this
+        account. Everything else (app-data events) passes through unchanged."""
+        if not event.topic.startswith(("notification.", "notifications.")):
+            return True
+        payload = event.payload
+        owner = payload.get("account") if isinstance(payload, dict) else None
+        # Untagged (legacy) notification events default to the legacy/admin owner.
+        return (owner or owner_key(None, is_admin=True)) == my_owner
+
     queue = bus.subscribe()
     await ws.send_json(_frame({"type": "ready"}))
     try:
         while True:
             event = await queue.get()
+            if not _for_me(event):
+                continue
             await ws.send_json(_frame(event.as_message()))
     except WebSocketDisconnect:
         pass

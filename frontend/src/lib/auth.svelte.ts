@@ -58,7 +58,19 @@ class Auth {
 
 	/** In-memory vault key; null unless a password login or PIN unlock happened
 	 *  this session. The vault module reads this. */
-	#masterKey: Uint8Array | null = null;
+	#masterKey = $state<Uint8Array | null>(null);
+
+	/** True when we have a live server session (`state==='active'`) but the vault
+	 *  master key is missing — e.g. after a reload, which keeps the session cookie
+	 *  but drops the in-memory key. The shell shows an unlock gate in this case.
+	 *  Reactive so the gate appears/disappears as the key comes and goes. */
+	get locked(): boolean {
+		return this.state === 'active' && this.#masterKey === null;
+	}
+
+	/** Whether a PIN-wrapped key exists locally, so the lock gate can offer the
+	 *  fast PIN unlock instead of the full password. Resolved on demand. */
+	hasLocalPin = $state(false);
 
 	get masterKey(): Uint8Array | null {
 		return this.#masterKey;
@@ -76,6 +88,12 @@ class Auth {
 				this.username = data.username ?? null;
 				this.role = data.role ?? null;
 				this.state = 'active';
+				// The session survived but the in-memory master key may not have
+				// (e.g. a page reload). If so, `locked` is now true; tell the gate
+				// whether it can offer the fast PIN unlock.
+				if (this.#masterKey === null) {
+					this.hasLocalPin = await hasWrappedMasterKey();
+				}
 			} else if (data.authenticated && data.needs === 'reset') {
 				this.username = data.username ?? null;
 				this.role = data.role ?? 'child';
@@ -206,6 +224,68 @@ class Auth {
 			}
 			this.#masterKey = key;
 			this.state = 'active';
+		} catch (e) {
+			this.error = e instanceof Error ? e.message : 'Unlock failed.';
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	/** Recover the vault master key with a PIN, for the locked-but-active case
+	 *  (reload kept the session, dropped the key). Local-only: the session is
+	 *  already valid, so this just unwraps the PIN-wrapped key from IndexedDB. */
+	async unlockWithPin(pin: string): Promise<void> {
+		this.busy = true;
+		this.error = null;
+		try {
+			const key = await unwrapMasterKey(pin);
+			if (!key) {
+				this.error = 'Wrong PIN.';
+				return;
+			}
+			this.#masterKey = key;
+		} catch (e) {
+			this.error = e instanceof Error ? e.message : 'Unlock failed.';
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	/** Recover the vault master key by re-entering the password, for the
+	 *  locked-but-active case. Re-derives the key from KDF params; verifies the
+	 *  password against the server so a wrong one is rejected rather than silently
+	 *  producing a garbage key. Re-wraps under the PIN if one is given. */
+	async unlockWithPassword(password: string, pin?: string): Promise<void> {
+		if (!this.username) {
+			this.error = 'Session expired — sign in again.';
+			this.state = 'password';
+			return;
+		}
+		this.busy = true;
+		this.error = null;
+		try {
+			const params = await this.#kdf(this.username);
+			const authKey = await deriveAuthKey(password, params.auth_salt);
+			// Verify the password by re-logging in (rotates the session, harmless).
+			const res = await fetch(apiUrl('/api/auth/login'), {
+				method: 'POST',
+				credentials: 'include',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ username: this.username, auth_key: authKey, ...(pin ? { pin } : {}) })
+			});
+			if (!res.ok) {
+				this.error = res.status === 429 ? 'Too many attempts — wait and retry.' : 'Wrong password.';
+				return;
+			}
+			this.#masterKey = await deriveMasterKey(password, params.master_salt);
+			if (pin) {
+				try {
+					await this.setLocalPin(pin);
+					this.hasLocalPin = true;
+				} catch {
+					/* non-fatal */
+				}
+			}
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Unlock failed.';
 		} finally {

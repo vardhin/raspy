@@ -157,6 +157,69 @@ async def test_outbox_prunes_gone_subscription(tmp_path, monkeypatch) -> None:
     assert rows == []
 
 
+async def test_notifications_are_per_account(tmp_path) -> None:
+    """A child's notification must not appear in the admin's history (or another
+    child's), and vice-versa. notify()/list() resolve the owner from the same
+    ContextVars the auth gate sets per request."""
+    from raspy.core.auth.scope import current_account, current_account_legacy
+
+    svc = await _svc(tmp_path)
+
+    # Admin (legacy scope) raises one; a child raises another.
+    tok_a = current_account.set("admin")
+    tok_l = current_account_legacy.set(True)
+    await svc.notify("admin note")
+    current_account.reset(tok_a)
+    current_account_legacy.reset(tok_l)
+
+    tok_a = current_account.set("kid")
+    tok_l = current_account_legacy.set(False)
+    await svc.notify("kid note")
+    # Child only sees its own.
+    kid_titles = [n["title"] for n in await svc.list()]
+    assert kid_titles == ["kid note"]
+    assert await svc.unread_count() == 1
+    current_account.reset(tok_a)
+    current_account_legacy.reset(tok_l)
+
+    # Admin only sees its own.
+    tok_a = current_account.set("admin")
+    tok_l = current_account_legacy.set(True)
+    admin_titles = [n["title"] for n in await svc.list()]
+    assert admin_titles == ["admin note"]
+    assert await svc.unread_count() == 1
+    current_account.reset(tok_a)
+    current_account_legacy.reset(tok_l)
+
+
+async def test_push_fans_out_only_to_owning_account(tmp_path) -> None:
+    """A notification enqueues outbox rows only for subscriptions owned by the
+    same account, so a child's push never reaches the admin's device."""
+    from raspy.core.auth.scope import current_account, current_account_legacy
+    from raspy.core.notifications import PushSubscribe
+
+    svc = await _svc(tmp_path)
+
+    # Admin device subscribes (legacy scope).
+    tok_a = current_account.set("admin")
+    tok_l = current_account_legacy.set(True)
+    await svc.add_subscription(
+        PushSubscribe(endpoint="https://push.example/admin", keys={"p256dh": "k", "auth": "a"})
+    )
+    current_account.reset(tok_a)
+    current_account_legacy.reset(tok_l)
+
+    # A child raises a notification — no admin outbox row should appear.
+    tok_a = current_account.set("kid")
+    tok_l = current_account_legacy.set(False)
+    await svc.notify("kid note")
+    current_account.reset(tok_a)
+    current_account_legacy.reset(tok_l)
+
+    rows = await svc._db.fetch_all("SELECT endpoint FROM core_push_outbox")
+    assert rows == []  # the only subscription belongs to the admin
+
+
 async def test_outbox_retries_with_backoff_then_dies(tmp_path, monkeypatch) -> None:
     svc = await _svc(tmp_path)
     await _sub(svc)
