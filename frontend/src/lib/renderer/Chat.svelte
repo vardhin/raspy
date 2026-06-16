@@ -1,24 +1,16 @@
 <script lang="ts">
-	// Chat UI — pick an account and exchange E2E messages + media. Text is sealed to
-	// the recipient's public key (and to your own copy); media is encrypted and sent
-	// through the dropbox, so it also lands in each party's drop box. Multiple images
-	// in one message render as a clustered, swipeable carousel (MediaBubble).
+	// Chat UI — pick a contact from a horizontal pill bar and exchange E2E messages
+	// + media. Text is sealed to the recipient's public key (and your own copy);
+	// media is encrypted and delivered through the dropbox, so it also lands in each
+	// party's drop box. Multiple images in one message render as a clustered,
+	// swipeable carousel (MediaBubble).
 	//
-	// Gates on the vault being unlocked (the keypair derives from the master key).
-	// All crypto is client-side; the Pi stores only ciphertext. Token-only styling.
+	// A topbar carries the title + a message search (client-side, over decrypted
+	// text). Media decrypts through the app-scoped mediaCache, so sending a new
+	// message no longer re-decrypts existing images, and the cache is freed when you
+	// leave the app. Token-only styling.
 	import { onMount, onDestroy, tick } from 'svelte';
-	import {
-		Surface,
-		Stack,
-		Text,
-		Button,
-		Icon,
-		Spinner,
-		Field,
-		AccountPicker,
-		ChatBubble,
-		MediaBubble
-	} from '$lib/components';
+	import { Surface, Stack, Text, Button, Icon, Spinner, ChatBubble, MediaBubble, Field } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { fetchDirectory, type DirectoryEntry } from '$lib/crypto/identity';
@@ -31,6 +23,7 @@
 		type OpenedThread,
 		type MediaRef
 	} from '$lib/crypto/chat';
+	import { clearMediaCache } from '$lib/crypto/mediaCache';
 
 	let locked = $derived(auth.masterKey === null);
 	let ready = $state(false);
@@ -40,9 +33,17 @@
 	let others = $derived(directory.filter((d) => d.username !== auth.username));
 	let threads = $state<OpenedThread[]>([]);
 
-	let active = $state<string | null>(null); // the peer username
+	let active = $state<string | null>(null);
 	let activeKey = $derived(directory.find((d) => d.username === active)?.public_key ?? null);
 	let messages = $state<OpenedMessage[]>([]);
+
+	let searching = $state(false);
+	let search = $state('');
+	let shownMessages = $derived(
+		search.trim()
+			? messages.filter((m) => (m.payload?.text ?? '').toLowerCase().includes(search.trim().toLowerCase()))
+			: messages
+	);
 
 	let draft = $state('');
 	let pendingFiles = $state<File[]>([]);
@@ -71,8 +72,6 @@
 			unsub = connection.onEvent((topic, payload) => {
 				const p = payload as { from?: string; to?: string } | null;
 				if (topic === 'chat.message') {
-					// Refresh the open conversation if it's the relevant peer; always
-					// refresh the thread list.
 					if (active && (p?.from === active || p?.to === active)) openConversation(active);
 					loadThreads().then((t) => (threads = t));
 				}
@@ -82,10 +81,15 @@
 		}
 	}
 
-	onDestroy(() => unsub?.());
+	onDestroy(() => {
+		unsub?.();
+		clearMediaCache();
+	});
 
 	async function openConversation(peer: string) {
 		active = peer;
+		search = '';
+		searching = false;
 		messages = await loadConversation(peer);
 		await scrollToBottom();
 	}
@@ -118,7 +122,6 @@
 			threads = await loadThreads();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Send failed.';
-			// Restore the draft so nothing is lost.
 			draft = text;
 			pendingFiles = files;
 		} finally {
@@ -127,9 +130,15 @@
 		}
 	}
 
-	// Decrypt one media ref for a message's MediaBubble.
+	function mediaItems(refs: MediaRef[]) {
+		return refs.map((r) => ({ hash: r.hash, name: r.name, type: r.type }));
+	}
 	function mediaLoader(refs: MediaRef[]) {
-		return (_item: { name?: string }, index: number) => loadMedia(refs[index]);
+		// Match by hash so the loader is correct regardless of carousel order.
+		return (item: { hash: string }) => {
+			const ref = refs.find((r) => r.hash === item.hash)!;
+			return loadMedia(ref);
+		};
 	}
 
 	function onComposerKey(e: KeyboardEvent) {
@@ -137,6 +146,13 @@
 			e.preventDefault();
 			send();
 		}
+	}
+
+	function initial(name: string): string {
+		return (name.trim()[0] ?? '?').toUpperCase();
+	}
+	function previewOf(username: string): string {
+		return threads.find((t) => t.peer === username)?.preview ?? '';
 	}
 </script>
 
@@ -153,50 +169,61 @@
 	<Surface><Stack align="center"><Spinner /></Stack></Surface>
 {:else}
 	<div class="chat">
-		<!-- Threads / account picker -->
-		<Surface>
-			<Stack gap={3}>
-				<Text role="heading">Conversations</Text>
-				<AccountPicker
-					accounts={others.map((o) => {
-						const t = threads.find((x) => x.peer === o.username);
-						return { username: o.username, role: o.role, subtitle: t?.preview };
-					})}
-					selected={active}
-					onselect={openConversation}
-				/>
-			</Stack>
-		</Surface>
+		<header class="toolbar">
+			<Text role="heading">{active ? active : 'Chat'}</Text>
+			<div class="toolbar-actions">
+				{#if active}
+					<Button size="sm" variant={searching ? 'accent' : 'neutral'} onclick={() => (searching = !searching)}>
+						<Icon name="search" size={15} />
+					</Button>
+				{/if}
+			</div>
+		</header>
 
-		<!-- Conversation -->
+		<!-- Horizontal contact pill bar -->
+		<div class="pills" role="tablist" aria-label="Contacts">
+			{#each others as o (o.username)}
+				<button class="pill" class:on={active === o.username} role="tab" aria-selected={active === o.username} onclick={() => openConversation(o.username)} title={previewOf(o.username)}>
+					<span class="dot">{initial(o.username)}</span>
+					{o.username}
+				</button>
+			{/each}
+			{#if others.length === 0}
+				<Text role="muted">No other accounts to chat with yet.</Text>
+			{/if}
+		</div>
+
+		{#if searching && active}
+			<div class="search-row">
+				<Field type="text" placeholder="Search this conversation…" bind:value={search} />
+			</div>
+		{/if}
+
+		{#if error}<div class="error">{error}</div>{/if}
+
 		<Surface>
 			{#if !active}
 				<Stack gap={2} align="center">
 					<Icon name="message-circle" size={28} />
-					<Text role="muted">Pick an account to start chatting.</Text>
+					<Text role="muted">Pick a contact above to start chatting.</Text>
 				</Stack>
 			{:else}
 				<div class="convo">
 					<div class="messages" bind:this={scrollEl}>
-						{#if messages.length === 0}
-							<Text role="muted">No messages yet — say hello.</Text>
+						{#if shownMessages.length === 0}
+							<Text role="muted">{search ? 'No matching messages.' : 'No messages yet — say hello.'}</Text>
 						{/if}
-						{#each messages as m (m.id)}
+						{#each shownMessages as m (m.id)}
 							<ChatBubble mine={m.mine} text={m.payload?.text ?? ''} time={m.created}>
 								{#snippet media()}
 									{#if m.payload?.media?.length}
-										<MediaBubble
-											items={m.payload.media.map((r) => ({ name: r.name, type: r.type }))}
-											load={mediaLoader(m.payload.media)}
-											compact
-										/>
+										<MediaBubble items={mediaItems(m.payload.media)} load={mediaLoader(m.payload.media)} compact />
 									{/if}
 								{/snippet}
 							</ChatBubble>
 						{/each}
 					</div>
 
-					<!-- Composer -->
 					<div class="composer">
 						{#if pendingFiles.length}
 							<div class="attachments">
@@ -217,7 +244,6 @@
 								<Text role="muted">Sending… {sendPct != null ? Math.round(sendPct * 100) + '%' : ''}</Text>
 							</div>
 						{/if}
-						{#if error}<Text role="muted">{error}</Text>{/if}
 						<div class="bar">
 							<button class="attach" aria-label="Attach images" onclick={() => fileInput?.click()}>
 								<Icon name="paperclip" size={18} />
@@ -234,13 +260,7 @@
 									t.value = '';
 								}}
 							/>
-							<textarea
-								class="input"
-								placeholder="Message…"
-								rows="1"
-								bind:value={draft}
-								onkeydown={onComposerKey}
-							></textarea>
+							<textarea class="input" placeholder="Message…" rows="1" bind:value={draft} onkeydown={onComposerKey}></textarea>
 							<Button onclick={send} disabled={sending || (!draft.trim() && !pendingFiles.length)}>
 								<Icon name="send" size={16} />
 							</Button>
@@ -254,21 +274,70 @@
 
 <style>
 	.chat {
-		display: grid;
-		grid-template-columns: minmax(220px, 280px) 1fr;
-		gap: var(--space-4);
-		align-items: start;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
 		min-height: 60vh;
 	}
-	@media (max-width: 720px) {
-		.chat {
-			grid-template-columns: 1fr;
-		}
+	.toolbar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding-bottom: var(--space-2);
+		border-bottom: var(--border-width) solid var(--border-color);
+	}
+	.toolbar-actions {
+		display: flex;
+		gap: var(--space-2);
+	}
+	.pills {
+		display: flex;
+		gap: var(--space-2);
+		overflow-x: auto;
+		padding-bottom: var(--space-1);
+	}
+	.pill {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		flex: none;
+		padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1);
+		border-radius: var(--radius-pill, 999px);
+		border: var(--border-width) solid var(--border-color);
+		background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+		color: var(--fg);
+		cursor: pointer;
+		font-weight: var(--font-weight-bold);
+		white-space: nowrap;
+	}
+	.pill.on {
+		background: var(--accent);
+		color: var(--accent-fg);
+	}
+	.pill .dot {
+		width: 1.7rem;
+		height: 1.7rem;
+		display: grid;
+		place-items: center;
+		border-radius: 50%;
+		background: color-mix(in srgb, var(--fg) 14%, transparent);
+		font-size: 0.85rem;
+	}
+	.search-row {
+		max-width: 420px;
+	}
+	.error {
+		color: var(--danger);
+		border: var(--border-width) solid var(--danger);
+		border-radius: var(--radius-md);
+		padding: var(--space-2) var(--space-3);
+		background: color-mix(in srgb, var(--danger) 10%, transparent);
 	}
 	.convo {
 		display: flex;
 		flex-direction: column;
-		height: 70vh;
+		height: 68vh;
 		min-height: 420px;
 	}
 	.messages {

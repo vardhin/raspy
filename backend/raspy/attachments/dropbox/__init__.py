@@ -215,19 +215,28 @@ class Dropbox(BaseAttachment):
         @r.get("/items")
         async def list_items(
             sender: str | None = Query(None, alias="from"),
+            limit: int = Query(default=50, ge=1, le=500),
+            offset: int = Query(default=0, ge=0),
         ) -> list[dict[str, Any]]:
-            """My inbox: everything dropped to me, newest first. Optional ``from``
-            filters to one sending account (the picker filter you asked for)."""
+            """My inbox: everything dropped to me, newest first, paginated.
+
+            Optional ``from`` filters to one sending account (the See-page pill
+            bar). ``limit``/``offset`` page through by timestamp (mail-app style);
+            the ordering is deterministic (created, then id) so page boundaries are
+            stable. Filename search happens client-side — names live inside the
+            sealed metadata the Pi can't read."""
             t = await self._ensure()
+            where = ""
+            params: list[Any] = []
             if sender:
-                rows = await self.db.fetch_all(
-                    f"SELECT * FROM {t} WHERE sender = ? ORDER BY created DESC, id DESC",
-                    (sender,),
-                )
-            else:
-                rows = await self.db.fetch_all(
-                    f"SELECT * FROM {t} ORDER BY created DESC, id DESC"
-                )
+                where = "WHERE sender = ?"
+                params.append(sender)
+            params.extend([limit, offset])
+            rows = await self.db.fetch_all(
+                f"SELECT * FROM {t} {where} ORDER BY created DESC, id DESC "
+                f"LIMIT ? OFFSET ?",
+                params,
+            )
             return [self._row_api(row) for row in rows]
 
         @r.get("/senders")

@@ -177,6 +177,20 @@ def test_drop_lands_in_recipient_inbox(two_clients):
     assert got.content == _BLOB
 
 
+def test_dropbox_pagination(two_clients):
+    admin, child = two_clients
+    # Drop several distinct blobs (distinct content => distinct hashes) to the child.
+    for i in range(5):
+        _drop(admin, _CHILD, _BLOB + bytes([i]), f"S{i}")
+    page1 = child.get("/api/att/dropbox/items?limit=2&offset=0").json()
+    page2 = child.get("/api/att/dropbox/items?limit=2&offset=2").json()
+    assert len(page1) == 2 and len(page2) == 2
+    # Newest-first and non-overlapping pages.
+    ids = [it["id"] for it in page1] + [it["id"] for it in page2]
+    assert len(set(ids)) == 4
+    assert ids == sorted(ids, reverse=True)
+
+
 def test_drop_blob_isolated_to_recipient(two_clients):
     admin, child = two_clients
     _drop(admin, _CHILD, _BLOB, "SEALED")

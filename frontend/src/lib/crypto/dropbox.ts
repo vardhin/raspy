@@ -143,17 +143,20 @@ export async function openMeta(item: DropItem): Promise<DropMeta | null> {
 	}
 }
 
-/** My inbox. Optional ``from`` filters to one sending account. */
-export async function listItems(from?: string): Promise<OpenedDrop[]> {
-	const url = from
-		? attUrl('dropbox', `items?from=${encodeURIComponent(from)}`)
-		: attUrl('dropbox', 'items');
-	const res = await fetch(url, { credentials: 'include' });
+/** My inbox, paginated (newest first). Optional ``from`` filters to one sender.
+ *  Each returned item is opened (sealed metadata decrypted) so the caller can
+ *  search by filename / show name + type. */
+export async function listItems(
+	from?: string,
+	limit = 50,
+	offset = 0
+): Promise<OpenedDrop[]> {
+	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (from) params.set('from', from);
+	const res = await fetch(attUrl('dropbox', `items?${params}`), { credentials: 'include' });
 	if (!res.ok) throw new Error(`dropbox list failed: ${res.status}`);
 	const items = (await res.json()) as DropItem[];
-	return Promise.all(
-		items.map(async (it) => ({ ...it, meta: await openMeta(it) }))
-	);
+	return Promise.all(items.map(async (it) => ({ ...it, meta: await openMeta(it) })));
 }
 
 export interface Sender {
