@@ -6,6 +6,8 @@ out per attachment via ``Settings.attachment_config``.
 
 from __future__ import annotations
 
+import os
+import sys
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -14,12 +16,52 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Repo-relative default data dir: backend/data/ (gitignored).
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# Repo-relative default static bundle: the SvelteKit build output the spine
-# serves in production. backend/raspy/ -> ../../frontend/build.
-_DEFAULT_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "build"
+def _frozen_root() -> Path | None:
+    """The PyInstaller bundle root (``sys._MEIPASS``) when running as a frozen
+    one-file/-dir binary, else None. Datafiles added in the .spec land here."""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return None
+
+
+def _default_data_dir() -> Path:
+    """Where SQLite, secrets and attachment data live by default.
+
+    - Source checkout: backend/data/ (gitignored), as before.
+    - Frozen binary: a per-user OS location, because the binary itself may sit
+      somewhere read-only (e.g. /usr/local/bin, Program Files). The installer
+      can still override via RASPY_DATA_DIR, but this default means a
+      double-clicked binary works with no config at all.
+    """
+    if _frozen_root() is not None:
+        if sys.platform == "win32":
+            base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        elif sys.platform == "darwin":
+            base = Path.home() / "Library" / "Application Support"
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        return base / "raspy"
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+def _default_static_dir() -> Path:
+    """The built SvelteKit bundle the spine serves.
+
+    - Source checkout: repo's frontend/build/ (backend/raspy/ -> ../../frontend/build).
+    - Frozen binary: the bundle is packed into sys._MEIPASS/frontend by the .spec.
+    """
+    root = _frozen_root()
+    if root is not None:
+        return root / "frontend"
+    return Path(__file__).resolve().parent.parent.parent / "frontend" / "build"
+
+
+# Repo-relative (or per-user, when frozen) default data dir.
+_DEFAULT_DATA_DIR = _default_data_dir()
+
+# Default static bundle: the SvelteKit build output the spine serves in production.
+_DEFAULT_STATIC_DIR = _default_static_dir()
 
 
 class AuthSettings(BaseModel):
@@ -123,6 +165,21 @@ class Settings(BaseSettings):
     vapid_public_key: str | None = None
     vapid_private_key: str | None = None
     vapid_subject: str = "mailto:admin@localhost"
+
+    # Self-update (see plan/55-distribution.md). The spine periodically compares
+    # its own __version__ against the latest GitHub Release of this repo and, on
+    # one-click confirmation, downloads + swaps the matching platform binary and
+    # asks the OS service manager to restart. Only meaningful for the frozen
+    # binary build; a source checkout reports "not updatable".
+    update_repo: str = "vardhin/raspy"          # GitHub <owner>/<repo>
+    update_check_interval_s: int = 6 * 60 * 60  # 6h; 0 disables periodic checks
+    # How the running service is restarted after a swap. "auto" detects the
+    # platform's manager (systemd / launchd / Windows Service); "exec" re-execs
+    # the process in place (used when not run under a service manager).
+    update_restart_strategy: str = "auto"
+    # systemd/launchd/Windows service unit name the installer registered, used to
+    # trigger the restart. Empty => fall back to in-place re-exec.
+    update_service_name: str = "raspy"
 
     # Per-attachment config blob loaded from config.toml's [attachments.<id>].
     _attachment_config: dict[str, dict[str, Any]] = {}

@@ -14,8 +14,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .. import __version__
 from ..config import Settings, get_settings
-from . import manifest, notifications, static, system, ws
+from . import manifest, notifications, static, system, update_routes, ws
 from .auth import AuthService
 from .auth import router as auth_router
 from .auth.deps import principal_from_request
@@ -29,6 +30,7 @@ from .db import Database
 from .events import EventBus
 from .notifications import NotificationService
 from .registry import AttachmentRegistry
+from .updater import Updater
 
 # /api paths reachable without a valid access token. Everything else under /api
 # (including attachment routers mounted at startup, the WS, manifest, etc.)
@@ -96,6 +98,13 @@ async def lifespan(app: FastAPI):
     await registry.load_all()
     app.state.registry = registry
 
+    # Self-update: periodic check + one-click apply. Safe on a source checkout
+    # (it just reports updatable=False). Uses the same event bus + notifier so an
+    # available update surfaces as a live banner and a bell entry.
+    updater = Updater(settings=settings, events=events, notifications=notifier)
+    updater.start()
+    app.state.updater = updater
+
     log.info(
         "spine ready: %d attachment(s) loaded, %d errored",
         len(registry.loaded),
@@ -104,6 +113,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await updater.stop()
         await registry.shutdown_all()
         await notifier.stop()
         db.close()
@@ -112,7 +122,7 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
-    app = FastAPI(title="Raspy Spine", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Raspy Spine", version=__version__, lifespan=lifespan)
     app.state.settings = settings
 
     # Middleware order matters. Starlette wraps later-added middleware OUTERMOST,
@@ -178,6 +188,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(manifest.router, prefix="/api")
     app.include_router(ws.router, prefix="/api")
     app.include_router(notifications.router, prefix="/api")
+    app.include_router(update_routes.router, prefix="/api")
 
     # Frontend last: the SPA catch-all must not shadow the /api routes above.
     static.mount_frontend(app, settings.static_dir)

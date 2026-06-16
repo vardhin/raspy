@@ -46,6 +46,23 @@ def _prompt_password(label: str) -> str:
     return pw
 
 
+def _read_secret(label: str, *, from_stdin: bool) -> str:
+    """Get a secret either by interactive double-prompt (TTY) or one line from
+    stdin (installer/non-interactive). The installer pipes
+    ``printf 'pw\\npin\\n'`` so each call consumes the next line."""
+    if from_stdin:
+        line = sys.stdin.readline()
+        if not line:
+            print(f"error: expected {label} on stdin", file=sys.stderr)
+            sys.exit(1)
+        value = line.rstrip("\n")
+        if not value:
+            print(f"error: empty {label}", file=sys.stderr)
+            sys.exit(1)
+        return value
+    return _prompt_password(label)
+
+
 async def _service() -> tuple[AuthService, Database]:
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -64,12 +81,15 @@ async def _create_account(args: argparse.Namespace) -> None:
             print("error: an account already exists (use --force to add another)",
                   file=sys.stderr)
             sys.exit(1)
-        username = args.username or input("username: ").strip()
+        stdin = bool(getattr(args, "stdin", False))
+        username = args.username or (
+            sys.stdin.readline().strip() if stdin else input("username: ").strip()
+        )
         if not username:
             print("error: username required", file=sys.stderr)
             sys.exit(1)
-        password = _prompt_password("password")
-        pin = _prompt_password("mini-PIN")
+        password = _read_secret("password", from_stdin=stdin)
+        pin = _read_secret("mini-PIN", from_stdin=stdin)
 
         auth_salt = _rand_salt()
         master_salt = _rand_salt()
@@ -188,6 +208,12 @@ def main() -> None:
     p = sub.add_parser("create-account", help="create the initial account")
     p.add_argument("--username")
     p.add_argument("--force", action="store_true", help="add another account")
+    p.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read username (if no --username), password, then PIN as lines from "
+        "stdin — for non-interactive installers",
+    )
     p.set_defaults(func=lambda a: asyncio.run(_create_account(a)))
 
     p = sub.add_parser("set-pin", help="set/replace the mini-PIN")

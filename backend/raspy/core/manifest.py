@@ -22,7 +22,8 @@ router = APIRouter()
 #   accounts — the account-management app itself.
 #   files    — browses the Pi's single shared home dir (~); can't be isolated.
 #   stats    — system-wide host metrics; nothing per-account about them.
-_ADMIN_ONLY = {"accounts", "files", "stats"}
+#   connectivity — controls public internet exposure (tunnels); admin-only by design.
+_ADMIN_ONLY = {"accounts", "files", "stats", "connectivity"}
 
 
 async def _visible_attachments(request: Request) -> list[dict[str, Any]]:

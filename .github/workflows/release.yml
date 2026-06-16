@@ -1,0 +1,145 @@
+name: release
+
+# Build one self-contained binary per platform and publish them to a GitHub
+# Release. Triggered by pushing a version tag (v1.2.3). The install scripts
+# (scripts/install.sh / install.ps1) download these assets, so the END USER
+# needs nothing pre-installed — no Python, no Node, no uv. Everything is baked
+# into the binary by PyInstaller (see backend/raspy.spec).
+#
+# Assets published per release:
+#   raspy-<os>-<arch>[.exe]   the binary
+#   SHA256SUMS                checksums the installer verifies before swapping
+#   latest.json               { "version": "...", "assets": {...} } the in-app
+#                             updater reads (Phase 4) to learn the newest version
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:        # allow manual runs for testing the build
+
+permissions:
+  contents: write           # create the release + upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os_name: linux
+            arch: x64
+            ext: ""
+          - runner: ubuntu-24.04-arm     # the Raspberry Pi target
+            os_name: linux
+            arch: arm64
+            ext: ""
+          - runner: macos-13             # Intel mac
+            os_name: macos
+            arch: x64
+            ext: ""
+          - runner: macos-14             # Apple Silicon
+            os_name: macos
+            arch: arm64
+            ext: ""
+          - runner: windows-2022
+            os_name: windows
+            arch: x64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build frontend (same-origin)
+        working-directory: frontend
+        env:
+          PUBLIC_API_BASE: ""           # spine-hosted: talk to own origin
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Install backend + PyInstaller
+        working-directory: backend
+        run: uv sync --group dev
+
+      - name: Build binary
+        working-directory: backend
+        run: uv run pyinstaller raspy.spec --noconfirm
+
+      - name: Stage asset
+        id: stage
+        shell: bash
+        run: |
+          name="raspy-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
+          mkdir -p "$GITHUB_WORKSPACE/staging"
+          cp "backend/dist/raspy${{ matrix.ext }}" "$GITHUB_WORKSPACE/staging/$name"
+          echo "asset_name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test (binary reports its version)
+        shell: bash
+        run: |
+          "$GITHUB_WORKSPACE/staging/${{ steps.stage.outputs.asset_name }}" version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.asset_name }}
+          path: staging/${{ steps.stage.outputs.asset_name }}
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums + latest.json manifest
+        id: meta
+        shell: bash
+        run: |
+          cd dist
+          sha256sum raspy-* > SHA256SUMS
+          # Derive the version from the tag (v1.2.3 -> 1.2.3); fallback for manual runs.
+          ref="${GITHUB_REF_NAME:-v0.0.0}"
+          version="${ref#v}"
+          {
+            echo "{"
+            echo "  \"version\": \"$version\","
+            echo "  \"assets\": {"
+            first=1
+            for f in raspy-*; do
+              key="${f#raspy-}"          # e.g. linux-arm64 / windows-x64.exe
+              [ $first -eq 1 ] || echo "    ,"
+              printf '    "%s": "%s"' "$key" "$f"
+              first=0
+            done
+            echo ""
+            echo "  }"
+            echo "}"
+          } > latest.json
+          cat latest.json
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/raspy-*
+            dist/SHA256SUMS
+            dist/latest.json
+          generate_release_notes: true
+          fail_on_unmatched_files: true

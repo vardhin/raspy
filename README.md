@@ -19,8 +19,36 @@ see, and talks back to each app under `/api/att/<id>/`.
 - `plan/` - architecture notes and roadmap.
 
 Built-in attachments currently include accounts, todo, notes, notifications,
-files, system stats, mail, calendar, contacts, vault, and vibe-of-the-day. The exact list
-is discovered at startup and filtered per account in `/api/manifest`.
+files, system stats, mail, calendar, contacts, vault, connectivity, and
+vibe-of-the-day. The exact list is discovered at startup and filtered per account
+in `/api/manifest`.
+
+## Install (one command, no dependencies)
+
+The fastest path needs nothing pre-installed — no Python, no Node. A
+self-contained binary (built by CI for each platform) is downloaded, verified,
+and set up as a boot service. The installer also creates the first admin account
+and generates Web Push keys for you.
+
+Linux / macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vardhin/raspy/master/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/vardhin/raspy/master/scripts/install.ps1 | iex
+```
+
+Re-running the installer on a machine that already has Raspy shows a menu:
+update, uninstall, or cancel. Uninstall removes the binary and boot service and
+asks before touching your data dir (accounts, vault, notes).
+
+After it finishes, open `http://127.0.0.1:49317` and log in with the admin
+account you just created. To go further (build from source, dev frontend), read
+on.
 
 ## Current shape
 
@@ -180,6 +208,34 @@ sudo systemctl enable --now raspy
 
 The spine is designed to sit behind LAN access, Tailscale, Cloudflare Tunnel, or
 another reverse layer. App auth stays inside Raspy either way.
+
+## Updating
+
+Installed binaries self-check against the latest GitHub Release. When a newer
+version exists, an **Update available** banner appears in the UI (admin only).
+Clicking **Update now** downloads the new binary, verifies its checksum, swaps it
+in, and restarts via the service manager — the server never restarts silently.
+Source checkouts report "not updatable" and are updated with `git pull` as usual.
+
+## Exposing it to the internet
+
+The **connectivity** attachment (admin only) sets up remote access from the UI:
+paste a Cloudflare Tunnel token or a Tailscale auth key and Raspy brings the link
+up and shows the public address. It detects whether `cloudflared` / `tailscale`
+are installed and links to their install docs if not. See
+[plan/56-connectivity.md](plan/56-connectivity.md).
+
+## Cutting a release (maintainers)
+
+`scripts/release.sh` bumps the version (single source of truth:
+`backend/raspy/__init__.py`), tags, and pushes — which triggers
+`.github/workflows/release.yml` to build one binary per platform and publish them
+plus `SHA256SUMS` and `latest.json` to a GitHub Release.
+
+```sh
+scripts/release.sh patch       # or minor / major / an explicit 1.2.3
+scripts/release.sh --dispatch  # trigger the build without tagging (needs gh)
+```
 
 ## Adding an attachment
 

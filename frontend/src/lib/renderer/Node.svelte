@@ -15,6 +15,7 @@
 	import Contacts from './Contacts.svelte';
 	import Notes from './Notes.svelte';
 	import Accounts from './Accounts.svelte';
+	import Connectivity from './Connectivity.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -171,6 +172,8 @@
 	<Notes />
 {:else if node.type === 'accounts'}
 	<Accounts />
+{:else if node.type === 'connectivity'}
+	<Connectivity {node} />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

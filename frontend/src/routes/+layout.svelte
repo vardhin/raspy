@@ -8,7 +8,8 @@
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
-	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate } from '$lib/components';
+	import { update } from '$lib/update/store.svelte';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate, UpdateBanner } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { setAuthLostHandler } from '$lib/api';
 
@@ -25,6 +26,7 @@
 		servicesStarted = true;
 		connection.start();
 		notifications.start();
+		update.start();
 	}
 	let manifestUser: string | null = null;
 
@@ -85,6 +87,7 @@
 	onDestroy(() => {
 		offReconnect();
 		notifications.stop();
+		update.stop();
 		connection.stop();
 		if (typeof document !== 'undefined') {
 			document.removeEventListener('visibilitychange', onVisible);
@@ -140,6 +143,7 @@
 	</div>
 
 	<main class="content">
+		<UpdateBanner />
 		<div class="content-inner">
 			{@render children()}
 		</div>

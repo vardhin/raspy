@@ -27,3 +27,4 @@ export { default as PasswordLogin } from './PasswordLogin.svelte';
 export { default as PinUnlock } from './PinUnlock.svelte';
 export { default as AccountSetup } from './AccountSetup.svelte';
 export { default as LockGate } from './LockGate.svelte';
+export { default as UpdateBanner } from './UpdateBanner.svelte';

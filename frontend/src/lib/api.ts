@@ -210,6 +210,21 @@ async function sessionNeeds(): Promise<string> {
 	}
 }
 
+/** GET a core (non-attachment) spine endpoint, e.g. "/api/update/status". */
+export function apiGet<T = unknown>(path: string): Promise<T> {
+	return request<T>(apiUrl(path));
+}
+
+/** POST to a core (non-attachment) spine endpoint with the usual auth/CSRF/channel. */
+export function apiPost<T = unknown>(path: string, body?: unknown): Promise<T> {
+	return request<T>(apiUrl(path), {
+		method: 'POST',
+		...(body !== undefined
+			? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+			: {})
+	});
+}
+
 /** GET a list/object from an attachment's API (relative path). */
 export function attGet<T = unknown>(attachmentId: string, path: string): Promise<T> {
 	return request<T>(attUrl(attachmentId, path));
