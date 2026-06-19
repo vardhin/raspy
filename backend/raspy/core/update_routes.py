@@ -6,8 +6,13 @@
   POST /api/update/apply      download + verify + swap + restart; optional
                               {"target": "v0.4.0"} installs a specific version
                               (up OR down — rollback)
+  DELETE /api/update/cache/{tag}  remove a cached binary (reclaim disk)
   GET  /api/update/autocheck  periodic-check config {enabled, interval_s}
   PUT  /api/update/autocheck  set the periodic-check config
+
+Apply emits live ``update.progress`` events (downloading → downloaded → verifying
+→ caching → verified/cached_hit → swapping → restarting | error) over the WS so
+the UI can show exactly which step is happening.
 
 These are gated by the global auth middleware (under /api/, not public) and
 further restricted to admins here, since updating swaps the running binary.
@@ -71,6 +76,13 @@ async def apply(request: Request, body: ApplyBody | None = None) -> dict:
     updater = _require_admin(request)
     target = body.target if body else None
     return await updater.apply(target=target)
+
+
+@router.delete("/cache/{tag}")
+async def delete_cache(request: Request, tag: str) -> dict:
+    """Remove a cached binary to reclaim disk on the Pi's SD card."""
+    updater = _require_admin(request)
+    return updater.delete_cached(tag)
 
 
 @router.get("/autocheck")

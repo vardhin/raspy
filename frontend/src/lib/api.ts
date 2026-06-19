@@ -252,6 +252,11 @@ export function apiPut<T = unknown>(path: string, body?: unknown): Promise<T> {
 	});
 }
 
+/** DELETE a core (non-attachment) spine endpoint with the usual auth/CSRF/channel. */
+export function apiDelete<T = unknown>(path: string): Promise<T> {
+	return request<T>(apiUrl(path), { method: 'DELETE' });
+}
+
 /** GET a list/object from an attachment's API (relative path). */
 export function attGet<T = unknown>(attachmentId: string, path: string): Promise<T> {
 	return request<T>(attUrl(attachmentId, path));

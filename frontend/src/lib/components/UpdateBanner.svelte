@@ -1,38 +1,41 @@
 <script lang="ts">
-	// "Update available" banner. Renders only when the backend reports a newer,
-	// applicable release (admin only — see update store). One click downloads,
-	// verifies, swaps and restarts the spine; we keep the human in the loop, the
-	// server never restarts silently.
-	import { update } from '$lib/update/store.svelte';
+	// "Update available" banner. Renders when the backend reports a newer release,
+	// or while an update is actively applying (so the live, step-by-step progress
+	// is visible). One click downloads, verifies, swaps and restarts the spine; we
+	// keep the human in the loop — the server never restarts silently.
+	import { update, STEP_LABEL, type Step } from '$lib/update/store.svelte';
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
+
+	const busy = $derived(update.phase === 'applying' || update.phase === 'restarting');
+	const stepText = $derived(update.step ? STEP_LABEL[update.step as Step] : '');
+	const applyingVer = $derived((update.applyingTag ?? update.latest ?? '').replace(/^v/, ''));
 </script>
 
-{#if update.showBanner}
+{#if update.showBanner || busy || update.phase === 'error'}
 	<div class="update-banner" role="status" aria-live="polite">
 		<Icon name="download" size={18} />
 		<span class="msg">
-			{#if update.phase === 'restarting'}
-				Updating to <b>{update.latest}</b> — the server is restarting…
+			{#if busy}
+				Updating to <b>{applyingVer}</b>{#if stepText}<span class="step"> · {stepText}</span
+					>{/if}
 			{:else if update.phase === 'error'}
 				Update failed: {update.error}
 			{:else}
-				Raspy <b>{update.latest}</b> is available (you're on {update.current}).
+				Raspy <b>{update.latest}</b> is available (you're on {update.currentLabel}).
 			{/if}
 		</span>
 
 		<div class="actions">
-			{#if update.phase === 'restarting'}
+			{#if busy}
 				<span class="spin" aria-hidden="true"></span>
+			{:else if update.phase === 'error'}
+				<Button size="sm" variant="accent" onclick={() => update.apply()}>Retry</Button>
+				<button class="dismiss" aria-label="Dismiss" onclick={() => update.dismiss()}>
+					<Icon name="x" size={16} />
+				</button>
 			{:else}
-				<Button
-					size="sm"
-					variant="accent"
-					disabled={update.phase === 'applying'}
-					onclick={() => update.apply()}
-				>
-					{update.phase === 'applying' ? 'Updating…' : 'Update now'}
-				</Button>
+				<Button size="sm" variant="accent" onclick={() => update.apply()}>Update now</Button>
 				<button class="dismiss" aria-label="Dismiss" onclick={() => update.dismiss()}>
 					<Icon name="x" size={16} />
 				</button>
@@ -47,14 +50,22 @@
 		align-items: center;
 		gap: var(--space-3);
 		padding: var(--space-2) var(--space-4);
-		background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+		background: color-mix(
+			in srgb,
+			var(--accent) 14%,
+			color-mix(in srgb, var(--surface-2) calc(var(--surface-alpha) * 100%), transparent)
+		);
 		color: var(--fg);
 		border-bottom: var(--border-width) solid var(--border-color);
+		backdrop-filter: blur(var(--blur));
 	}
 	.msg {
 		flex: 1;
 		min-width: 0;
 		font-size: 0.9rem;
+	}
+	.step {
+		color: var(--muted);
 	}
 	.actions {
 		display: flex;
@@ -67,13 +78,15 @@
 		justify-content: center;
 		padding: var(--space-1);
 		background: transparent;
-		color: var(--fg-muted, var(--fg));
+		color: var(--muted);
 		border: none;
 		border-radius: var(--radius-md);
 		cursor: pointer;
+		transition: background var(--motion-fast) var(--motion-ease);
 	}
 	.dismiss:hover {
-		background: var(--surface);
+		background: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 100%), transparent);
+		color: var(--fg);
 	}
 	.spin {
 		width: 1rem;

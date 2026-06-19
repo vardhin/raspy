@@ -91,10 +91,12 @@ class UpdateInfo:
     updatable: bool          # frozen binary on a known platform
     asset: str | None
     reason: str | None = None
+    current_tag: str | None = None   # recorded installed tag (truth over __version__)
 
     def as_dict(self) -> dict:
         return {
             "current": self.current,
+            "current_tag": self.current_tag,
             "latest": self.latest,
             "available": self.available,
             "updatable": self.updatable,
@@ -125,6 +127,68 @@ class Updater:
         # An admin can toggle/retune the periodic check at runtime from the
         # Updates app; the override survives restarts in a small JSON file (the
         # layered config.toml is read-only at runtime). Absent => use settings.
+
+    # ── installed-tag + binary cache ────────────────────────────────────────
+    def _installed_tag_path(self) -> Path:
+        return self._settings.data_dir / "installed_tag"
+
+    def installed_tag(self) -> str | None:
+        """The release tag we last swapped in (e.g. ``v0.5.2``). This is the
+        truth about what's running — independent of the binary's baked-in
+        ``__version__``, which is wrong whenever a release forgot to bump it.
+        ``None`` if we've never self-updated (original install)."""
+        try:
+            t = self._installed_tag_path().read_text().strip()
+            return t or None
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+
+    def _record_installed_tag(self, tag: str) -> None:
+        try:
+            self._installed_tag_path().write_text(tag.strip())
+        except Exception:
+            log.exception("could not record installed tag %s", tag)
+
+    def _cache_dir(self) -> Path:
+        return self._settings.data_dir / "update_cache"
+
+    def _cached_path(self, tag: str, asset: str) -> Path:
+        """Where a verified binary for ``tag`` lives so a re-install is instant."""
+        return self._cache_dir() / tag.lstrip("v") / asset
+
+    def cached_tags(self) -> set[str]:
+        """Tags whose binary for THIS platform is cached + verified on disk."""
+        asset = _asset_name()
+        if asset is None:
+            return set()
+        out: set[str] = set()
+        root = self._cache_dir()
+        if not root.is_dir():
+            return out
+        for sub in root.iterdir():
+            if sub.is_dir() and (sub / asset).is_file():
+                out.add(f"v{sub.name}")
+        return out
+
+    def delete_cached(self, tag: str) -> dict:
+        tag = tag if tag.startswith("v") else f"v{tag}"
+        d = self._cache_dir() / tag.lstrip("v")
+        if not d.is_dir():
+            return {"ok": False, "error": "not cached"}
+        try:
+            shutil.rmtree(d)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "tag": tag}
+
+    def _emit_progress(self, stage: str, **extra) -> None:
+        """Broadcast one update step so the UI can show exactly where we are.
+        Stages: downloading, verifying, caching, swapping, restarting, error,
+        done (cached)."""
+        if self._events is not None:
+            self._events.publish("update.progress", {"stage": stage, **extra})
 
     def _autocheck_path(self) -> Path:
         return self._settings.data_dir / "update_autocheck.json"
@@ -185,6 +249,8 @@ class Updater:
         """
         asset = _asset_name()
         updatable = is_frozen() and asset is not None
+        cur_tag = self.installed_tag()                 # what we actually swapped in
+        cached = self.cached_tags()                    # tags ready for instant switch
         try:
             raw = await asyncio.to_thread(_fetch, self._releases_api_url())
             data = json.loads(raw.decode())
@@ -192,8 +258,10 @@ class Updater:
             log.info("release list failed: %s", exc)
             return {
                 "current": __version__,
+                "current_tag": cur_tag,
                 "updatable": updatable,
                 "asset": asset,
+                "cached": sorted(cached),
                 "releases": [],
                 "reason": f"list failed: {exc}",
             }
@@ -204,6 +272,10 @@ class Updater:
             tag = str(rel.get("tag_name") or "")
             version = tag.lstrip("v")
             names = {a.get("name") for a in rel.get("assets") or []}
+            is_cached = tag in cached
+            # "current" is the tag we recorded at swap time when we have one (the
+            # binary's baked-in __version__ can lie); else fall back to __version__.
+            is_current = (tag == cur_tag) if cur_tag else (version == __version__)
             releases.append(
                 {
                     "tag": tag,
@@ -214,14 +286,18 @@ class Updater:
                     "prerelease": bool(rel.get("prerelease")),
                     # Can we actually install this on the running platform?
                     "installable": bool(updatable and asset and asset in names),
-                    "is_current": version == __version__,
+                    # Cached binaries install instantly (no download).
+                    "cached": is_cached,
+                    "is_current": is_current,
                     "is_newer": bool(version and is_newer(version)),
                 }
             )
         return {
             "current": __version__,
+            "current_tag": cur_tag,
             "updatable": updatable,
             "asset": asset,
+            "cached": sorted(cached),
             "releases": releases,
             "reason": None if updatable else (
                 "not a frozen binary" if not is_frozen() else "unknown platform"
@@ -233,6 +309,10 @@ class Updater:
         the event loop is never blocked."""
         asset = _asset_name()
         updatable = is_frozen() and asset is not None
+        cur_tag = self.installed_tag()
+        # The local version to compare against: the recorded installed tag's
+        # version when we have one (truth), else the binary's baked-in __version__.
+        local = cur_tag.lstrip("v") if cur_tag else __version__
         try:
             raw = await asyncio.to_thread(_fetch, self._latest_json_url())
             meta = json.loads(raw.decode())
@@ -240,16 +320,17 @@ class Updater:
         except Exception as exc:  # network down, no release yet, etc.
             log.info("update check failed: %s", exc)
             return UpdateInfo(
-                current=__version__, latest=None, available=False,
-                updatable=updatable, asset=asset, reason=f"check failed: {exc}",
+                current=__version__, current_tag=cur_tag, latest=None,
+                available=False, updatable=updatable, asset=asset,
+                reason=f"check failed: {exc}",
             )
-        available = bool(latest and is_newer(latest))
+        available = bool(latest and is_newer(latest, local))
         reason = None
         if not updatable:
             reason = "not a frozen binary" if not is_frozen() else "unknown platform"
         return UpdateInfo(
-            current=__version__, latest=latest, available=available,
-            updatable=updatable, asset=asset, reason=reason,
+            current=__version__, current_tag=cur_tag, latest=latest,
+            available=available, updatable=updatable, asset=asset, reason=reason,
         )
 
     # ── apply ───────────────────────────────────────────────────────────────
@@ -276,49 +357,91 @@ class Updater:
             # Specific-version path: install exactly this tag (allows downgrade).
             target = target if target.startswith("v") else f"v{target}"
             to = target.lstrip("v")
-            if to == __version__:
-                return {"ok": False, "error": "already on this version", "current": __version__}
+            # Compare against the recorded installed tag (truth) when we have one,
+            # not the binary's baked-in __version__ (which can be wrong). This lets
+            # you re-flash a tag whose version string collides with __version__.
+            cur_tag = self.installed_tag()
+            if cur_tag == target or (cur_tag is None and to == __version__):
+                return {"ok": False, "error": "already on this version", "current": to}
+
+        # We must know the concrete tag to cache/record by; resolve "latest".
+        tag = target
+        if tag is None:
+            tag = f"v{to}" if to else None
+        tag_label = tag or (f"v{to}" if to else "latest")
 
         self._applying = True
         try:
-            new_path = await asyncio.to_thread(self._download_verified, asset, target)
-            await asyncio.to_thread(self._swap, new_path)
+            cached = self._cached_path(tag_label, asset) if tag else None
+            if cached is not None and cached.is_file():
+                # Instant path: a verified binary for this tag is already on disk.
+                self._emit_progress("cached_hit", tag=tag_label, to=to)
+                bin_path = cached
+            else:
+                bin_path = await asyncio.to_thread(
+                    self._fetch_verify_cache, asset, target, tag_label, to
+                )
+            self._emit_progress("swapping", tag=tag_label, to=to)
+            await asyncio.to_thread(self._swap, bin_path)
+            if tag:
+                self._record_installed_tag(tag_label)
         except Exception as exc:
             self._applying = False
             log.exception("update apply failed")
+            self._emit_progress("error", tag=tag_label, error=str(exc))
             return {"ok": False, "error": str(exc)}
         # Swap succeeded. Schedule the restart slightly later so this HTTP
         # response can flush to the browser before we go down.
         log.warning("update applied: %s -> %s; restarting", __version__, to)
+        self._emit_progress("restarting", tag=tag_label, to=to)
         asyncio.get_running_loop().call_later(0.5, self._restart)
-        return {"ok": True, "from": __version__, "to": to, "restarting": True}
+        return {"ok": True, "from": __version__, "to": to, "tag": tag_label, "restarting": True}
 
-    def _download_verified(self, asset: str, tag: str | None = None) -> Path:
+    def _fetch_verify_cache(
+        self, asset: str, tag: str | None, tag_label: str, to: str | None
+    ) -> Path:
+        """Download → checksum-verify → store in the per-tag cache. Runs in a
+        worker thread; emits progress at each step. Returns the cached binary
+        path (kept on disk so a future re-install of this tag is instant)."""
         tmpdir = Path(tempfile.mkdtemp(prefix="raspy-update-"))
-        target = tmpdir / asset
-        log.info("downloading update asset %s (%s)", asset, tag or "latest")
-        data = _fetch(self._asset_url(asset, tag), timeout=120.0)
-        target.write_bytes(data)
-
-        # Verify against SHA256SUMS (published alongside the binaries).
+        tmp = tmpdir / asset
         try:
-            sums = _fetch(self._sums_url(tag), timeout=20.0).decode()
-        except Exception as exc:
-            raise RuntimeError(f"could not fetch SHA256SUMS: {exc}") from exc
-        want = None
-        for line in sums.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[1] == asset:
-                want = parts[0].lower()
-                break
-        if not want:
-            raise RuntimeError(f"no checksum entry for {asset}")
-        got = hashlib.sha256(target.read_bytes()).hexdigest()
-        if got != want:
-            raise RuntimeError(f"checksum mismatch (got {got} want {want})")
-        log.info("update asset verified")
-        os.chmod(target, 0o755)
-        return target
+            self._emit_progress("downloading", tag=tag_label, to=to)
+            log.info("downloading update asset %s (%s)", asset, tag or "latest")
+            data = _fetch(self._asset_url(asset, tag), timeout=300.0)
+            tmp.write_bytes(data)
+            self._emit_progress(
+                "downloaded", tag=tag_label, to=to, bytes=len(data)
+            )
+
+            self._emit_progress("verifying", tag=tag_label, to=to)
+            try:
+                sums = _fetch(self._sums_url(tag), timeout=20.0).decode()
+            except Exception as exc:
+                raise RuntimeError(f"could not fetch SHA256SUMS: {exc}") from exc
+            want = None
+            for line in sums.splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == asset:
+                    want = parts[0].lower()
+                    break
+            if not want:
+                raise RuntimeError(f"no checksum entry for {asset}")
+            got = hashlib.sha256(tmp.read_bytes()).hexdigest()
+            if got != want:
+                raise RuntimeError(f"checksum mismatch (got {got} want {want})")
+            log.info("update asset verified")
+
+            # Store the verified binary in the cache so switching back is instant.
+            self._emit_progress("caching", tag=tag_label, to=to)
+            dest = self._cached_path(tag_label, asset)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(tmp), str(dest))
+            os.chmod(dest, 0o755)
+            self._emit_progress("verified", tag=tag_label, to=to)
+            return dest
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _swap(self, new_path: Path) -> None:
         """Replace the running binary with new_path. Cross-platform:

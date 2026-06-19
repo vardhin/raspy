@@ -7,8 +7,8 @@
 	// server-side; a non-admin never sees this app (manifest _ADMIN_ONLY).
 	import { onMount } from 'svelte';
 	import { Surface, Stack, Text, Button, Icon, Switch, Field } from '$lib/components';
-	import { apiGet, apiPut } from '$lib/api';
-	import { update } from '$lib/update/store.svelte';
+	import { apiGet, apiPut, apiDelete } from '$lib/api';
+	import { update, STEP_LABEL, STEP_ORDER, type Step } from '$lib/update/store.svelte';
 
 	type Release = {
 		tag: string;
@@ -18,13 +18,16 @@
 		published_at: string | null;
 		prerelease: boolean;
 		installable: boolean;
+		cached: boolean;
 		is_current: boolean;
 		is_newer: boolean;
 	};
 	type ReleasesResp = {
 		current: string;
+		current_tag: string | null;
 		updatable: boolean;
 		asset: string | null;
+		cached: string[];
 		releases: Release[];
 		reason: string | null;
 	};
@@ -102,15 +105,31 @@
 
 	// Apply a specific version. Older versions (rollback) require a confirm step.
 	async function install(r: Release) {
-		if (!r.is_current && !r.is_newer && pendingTag !== r.tag) {
-			pendingTag = r.tag; // first click on a downgrade → ask to confirm
+		if (!r.is_current && !r.is_newer && !r.cached && pendingTag !== r.tag) {
+			pendingTag = r.tag; // first click on a non-cached downgrade → confirm
 			return;
 		}
 		pendingTag = null;
 		await update.apply(r.tag);
 	}
 
+	async function deleteCached(r: Release) {
+		try {
+			await apiDelete(`/api/update/cache/${encodeURIComponent(r.tag)}`);
+			await loadReleases();
+		} catch {
+			/* ignore — the row just keeps its Cached badge */
+		}
+	}
+
 	const applying = $derived(update.phase === 'applying' || update.phase === 'restarting');
+	// The live progress checklist: which steps are done / active.
+	const activeStep = $derived(update.step as Step | null);
+	function stepState(s: Step): 'done' | 'active' | 'todo' {
+		if (update.stepsSeen.includes(s) && activeStep !== s) return 'done';
+		if (activeStep === s) return 'active';
+		return 'todo';
+	}
 
 	onMount(() => {
 		void loadReleases();
@@ -128,8 +147,17 @@
 					<Text role="label">Current version</Text>
 					<div class="cur">
 						<Icon name="check-square" size={18} />
-						<span class="ver">{data?.current ?? update.current ?? '—'}</span>
+						<span class="ver"
+							>{(data?.current_tag ?? '').replace(/^v/, '') ||
+								data?.current ||
+								update.currentLabel}</span
+						>
 					</div>
+					{#if data?.current_tag && data.current_tag.replace(/^v/, '') !== data.current}
+						<!-- The binary's baked-in version disagrees with the tag we installed
+						     (a release that forgot to bump __version__); show the truth + note. -->
+						<Text role="muted">binary reports {data.current}</Text>
+					{/if}
 				</div>
 				<Button onclick={checkNow} disabled={update.phase === 'checking'}>
 					<Icon name="refresh-cw" size={16} />
@@ -154,10 +182,31 @@
 				<Text role="muted">You're on the latest version.</Text>
 			{/if}
 
-			{#if update.phase === 'restarting'}
-				<div class="note ok">
-					<Icon name="refresh-cw" size={16} />
-					<Text role="body">Installing & restarting… this page will reconnect shortly.</Text>
+			{#if applying || (update.phase === 'error' && update.stepsSeen.length > 0)}
+				<!-- Live, step-by-step view of exactly what the backend is doing. -->
+				<div class="progress">
+					<Text role="label">
+						Installing {(update.applyingTag ?? '').replace(/^v/, '')}
+					</Text>
+					<ul class="steps">
+						{#each STEP_ORDER as s (s)}
+							{@const st = stepState(s)}
+							<li class="pstep {st}">
+								<span class="dot" aria-hidden="true">
+									{#if st === 'done'}<Icon name="check" size={13} />
+									{:else if st === 'active'}<span class="spin" aria-hidden="true"></span>
+									{/if}
+								</span>
+								<span class="plabel">{STEP_LABEL[s]}</span>
+							</li>
+						{/each}
+					</ul>
+					{#if update.phase === 'error' && update.error}
+						<div class="note warn">
+							<Icon name="alert-triangle" size={16} />
+							<Text role="body">{update.error}</Text>
+						</div>
+					{/if}
 				</div>
 			{:else if update.phase === 'error' && update.error}
 				<div class="note warn">
@@ -229,6 +278,11 @@
 									{relationLabel(r)}
 								</span>
 								{#if r.prerelease}<span class="rel-tag pre">Pre-release</span>{/if}
+								{#if r.cached && !r.is_current}
+									<span class="rel-tag cached" title="Verified binary cached — installs instantly">
+										<Icon name="hard-drive" size={12} /> Cached
+									</span>
+								{/if}
 								<span class="rel-date">{fmtDate(r.published_at)}</span>
 							</div>
 							<div class="rel-actions">
@@ -240,6 +294,17 @@
 									>
 										<Icon name={expanded === r.tag ? 'chevron-up' : 'chevron-down'} size={16} />
 										Notes
+									</Button>
+								{/if}
+								{#if r.cached && !r.is_current}
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={applying}
+										onclick={() => deleteCached(r)}
+										title="Delete the cached binary"
+									>
+										<Icon name="trash-2" size={15} />
 									</Button>
 								{/if}
 								{#if r.is_current}
@@ -255,13 +320,13 @@
 									</Button>
 								{:else}
 									<Button
-										variant={r.is_newer ? 'accent' : 'neutral'}
+										variant={r.cached ? 'success' : r.is_newer ? 'accent' : 'neutral'}
 										size="sm"
 										disabled={applying}
 										onclick={() => install(r)}
 									>
-										<Icon name="download" size={15} />
-										{r.is_newer ? 'Install' : 'Roll back'}
+										<Icon name={r.cached ? 'play' : 'download'} size={15} />
+										{r.cached ? 'Switch' : r.is_newer ? 'Install' : 'Roll back'}
 									</Button>
 								{/if}
 							</div>
@@ -317,6 +382,81 @@
 	.note.warn {
 		background: color-mix(in srgb, var(--warn) 16%, transparent);
 		border-color: color-mix(in srgb, var(--warn) 45%, var(--border-color));
+	}
+	.progress {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		border-radius: var(--radius-md);
+		border: var(--border-width) solid var(--border-color);
+		background: color-mix(
+			in srgb,
+			var(--surface-2) calc(var(--surface-alpha) * 100%),
+			transparent
+		);
+	}
+	.steps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.pstep {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: 0.9rem;
+		color: var(--muted);
+		transition: color var(--motion-fast) var(--motion-ease);
+	}
+	.pstep.done {
+		color: var(--fg);
+	}
+	.pstep.active {
+		color: var(--accent);
+		font-weight: var(--font-weight-bold);
+	}
+	.pstep .dot {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.1rem;
+		height: 1.1rem;
+		flex: none;
+		border-radius: var(--radius-full);
+		border: var(--border-width) solid var(--border-color);
+		color: var(--accent);
+	}
+	.pstep.done .dot {
+		background: var(--success);
+		border-color: var(--success);
+		color: var(--success-fg);
+	}
+	.pstep.active .dot {
+		border-color: var(--accent);
+	}
+	.spin {
+		width: 0.7rem;
+		height: 0.7rem;
+		border: 2px solid var(--border-color);
+		border-top-color: var(--accent);
+		border-radius: var(--radius-full);
+		animation: spin 0.8s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	.rel-tag.cached {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		color: var(--success);
+		border-color: color-mix(in srgb, var(--success) 50%, var(--border-color));
 	}
 	.rel-head {
 		display: flex;

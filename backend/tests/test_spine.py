@@ -226,6 +226,35 @@ class TestUpdates:
         assert res["ok"] is False
         assert "frozen" in res["error"] or "platform" in res["error"]
 
+    def test_installed_tag_drives_current(self, client):
+        # No network: poke the updater directly (it lives on app.state) to record
+        # an installed tag, then confirm /status reports it as current_tag.
+        updater = client.app.state.updater
+        assert updater.installed_tag() is None
+        updater._record_installed_tag("v0.4.0")
+        assert updater.installed_tag() == "v0.4.0"
+        st = client.get("/api/update/status").json()
+        assert st["current_tag"] == "v0.4.0"
+
+    def test_binary_cache_list_and_delete(self, client):
+        from raspy.core.updater import _asset_name
+
+        updater = client.app.state.updater
+        asset = _asset_name()
+        if asset is None:
+            return  # unknown platform — cache keys off the asset name
+        # Seed a fake cached binary for a tag and confirm it's discovered.
+        cached = updater._cached_path("v0.3.0", asset)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b"fake-binary")
+        assert "v0.3.0" in updater.cached_tags()
+        # Delete via the admin route reclaims it.
+        r = client.delete("/api/update/cache/v0.3.0")
+        assert r.json()["ok"] is True
+        assert "v0.3.0" not in updater.cached_tags()
+        # Deleting a non-cached tag is a clean error, not a crash.
+        assert client.delete("/api/update/cache/v9.9.9").json()["ok"] is False
+
 
 def test_attachment_data_isolation(client):
     # todo and notes use separately-prefixed tables; creating in one doesn't leak.
