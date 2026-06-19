@@ -12,6 +12,7 @@ export default {
 		'--surface': '#fffaf3', // surface
 		'--surface-2': '#f2e9e1', // overlay
 		'--fg': '#575279', // text (muted plum)
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#797593', // subtle
 		'--border-color': '#dfdad9', // highlight med
 		'--accent': '#907aa9', // iris

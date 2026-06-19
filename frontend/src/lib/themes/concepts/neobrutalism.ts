@@ -29,6 +29,15 @@ export default {
 		'--space-5': '26px',
 		'--space-6': '36px',
 		// pure, palette-aware hard border
-		'--border-color': 'var(--fg)'
-	}
+		'--border-color': 'var(--fg)',
+		// interaction
+		'--shadow-hover': '7px 7px 0 var(--fg)',
+		'--hover-lift': '0',
+		'--hover-glow': '0 0 0 0 transparent',
+		'--focus-ring': '0 0 0 3px var(--accent), 5px 5px 0 var(--fg)',
+		'--press-scale': '1',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)',
+		'--fg-accent': 'var(--fg)'
+	},
+	defaultFont: 'space-grotesk'
 } satisfies ConceptTheme;

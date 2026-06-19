@@ -35,6 +35,14 @@ export default {
 		// surfaces blend toward the page bg so the extrusion reads as one material
 		'--surface': 'color-mix(in srgb, var(--bg) 92%, var(--fg))',
 		'--surface-2': 'var(--bg)',
-		'--border-color': 'transparent'
-	}
+		'--border-color': 'transparent',
+		// interaction
+		'--shadow-hover': 'inset 2px 2px 6px rgba(0,0,0,0.22), inset -2px -2px 6px rgba(255,255,255,0.06)',
+		'--hover-lift': '0',
+		'--hover-glow': '0 0 0 0 transparent',
+		'--focus-ring': '0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent)',
+		'--press-scale': '0.99',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	defaultFont: 'manrope'
 } satisfies ConceptTheme;

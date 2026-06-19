@@ -9,8 +9,12 @@
 	--fg: #e8e8e8;
 	color-scheme: dark;
 
-	font-family:
+	/* The active font, resolved by the theme store from the user's choice (or the
+	   concept's defaultFont). Seeded with a system stack in app.html for first
+	   paint; the bundled @font-face stacks apply on hydration. */
+	--font-sans:
 		system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+	font-family: var(--font-sans);
 	line-height: 1.5;
 }
 
@@ -18,15 +22,6 @@
 	--bg: #f5f5f5;
 	--fg: #1c1c1c;
 	color-scheme: light;
-}
-
-/* Concepts that ride a monospace stack (can't be expressed as a token). */
-:root[data-concept='terminal'],
-:root[data-concept='mono'],
-:root[data-concept='pixel'] {
-	font-family:
-		ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas,
-		monospace;
 }
 
 *,

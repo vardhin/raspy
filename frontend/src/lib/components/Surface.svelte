@@ -54,10 +54,7 @@
 		border-radius: var(--radius-lg);
 		box-shadow: var(--_surface-shadow);
 		color: var(--fg);
-		transition:
-			transform var(--motion-fast) var(--motion-ease),
-			box-shadow var(--motion-base) var(--motion-ease),
-			background var(--motion-base) var(--motion-ease);
+		transition: var(--transition);
 	}
 
 	.padded {
@@ -68,9 +65,14 @@
 		cursor: pointer;
 	}
 	.interactive:hover {
-		transform: translateY(calc(var(--depth) * -1px));
+		transform: translateY(var(--hover-lift));
+		box-shadow: var(--shadow-hover), var(--hover-glow);
 	}
 	.interactive:active {
-		transform: translateY(0);
+		transform: scale(var(--press-scale));
+	}
+	.interactive:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 </style>

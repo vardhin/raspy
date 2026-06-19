@@ -29,6 +29,14 @@ export default {
 		'--space-3': '16px',
 		'--space-4': '22px',
 		'--space-5': '32px',
-		'--space-6': '44px'
-	}
+		'--space-6': '44px',
+		// interaction
+		'--shadow-hover': '0 14px 34px rgba(0,0,0,0.20)',
+		'--hover-lift': '-3px',
+		'--hover-glow': '0 0 0 0 transparent',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent)',
+		'--press-scale': '0.97',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	defaultFont: 'poppins'
 } satisfies ConceptTheme;

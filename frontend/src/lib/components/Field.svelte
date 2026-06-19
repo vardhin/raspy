@@ -88,11 +88,15 @@
 		border-radius: var(--radius-md);
 		padding: var(--space-2) var(--space-3);
 		box-shadow: var(--shadow-sm);
-		transition: border-color var(--motion-fast) var(--motion-ease);
+		transition: var(--transition);
+	}
+	.control:hover {
+		border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
 	}
 	.control:focus {
 		outline: none;
 		border-color: var(--accent);
+		box-shadow: var(--focus-ring);
 	}
 	textarea.control {
 		min-height: 5rem;
@@ -133,7 +137,7 @@
 		border-color: var(--accent);
 	}
 	.cb-input:focus-visible + .cb-box {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 </style>

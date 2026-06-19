@@ -31,6 +31,15 @@ export default {
 		'--space-4': '21px',
 		'--space-5': '30px',
 		'--space-6': '42px',
-		'--border-color': 'rgba(255,255,255,0.35)'
-	}
+		'--border-color': 'rgba(255,255,255,0.35)',
+		// interaction
+		'--shadow-hover': '0 10px 30px color-mix(in srgb, var(--accent) 30%, rgba(0,0,0,0.25))',
+		'--hover-lift': '-2px',
+		'--hover-glow': '0 0 24px color-mix(in srgb, var(--accent) 35%, transparent)',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent)',
+		'--press-scale': '0.98',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	effects: [{"kind":"breathe","opacity":0.35}],
+	defaultFont: 'work-sans'
 } satisfies ConceptTheme;

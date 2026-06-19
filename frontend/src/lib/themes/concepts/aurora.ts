@@ -29,6 +29,15 @@ export default {
 		'--space-4': '22px',
 		'--space-5': '32px',
 		'--space-6': '46px',
-		'--border-color': 'color-mix(in srgb, var(--accent) 24%, transparent)'
-	}
+		'--border-color': 'color-mix(in srgb, var(--accent) 24%, transparent)',
+		// interaction
+		'--shadow-hover': '0 16px 50px color-mix(in srgb, var(--accent) 50%, transparent)',
+		'--hover-lift': '-3px',
+		'--hover-glow': '0 0 40px color-mix(in srgb, var(--accent) 55%, transparent)',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent)',
+		'--press-scale': '0.98',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	effects: [{"kind":"aurora","opacity":0.45},{"kind":"breathe","opacity":0.3}],
+	defaultFont: 'outfit'
 } satisfies ConceptTheme;

@@ -4,12 +4,13 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { theme } from '$lib/themes/store.svelte';
+	import { ensureFontFaces } from '$lib/themes/fonts/registry';
 	import { wallpaper } from '$lib/themes/wallpaper.svelte';
 	import { connection } from '$lib/connection.svelte';
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
 	import { update } from '$lib/update/store.svelte';
-	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate, UpdateBanner } from '$lib/components';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate, UpdateBanner, ThemeEffects } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { setAuthLostHandler } from '$lib/api';
 
@@ -70,6 +71,7 @@
 	// leaving the badge stuck on "connecting".
 	onMount(() => {
 		theme.init();
+		ensureFontFaces();
 		void wallpaper.init();
 		// Ask the server what to show (active / pin / password). Services start
 		// only once we reach 'active' (see the $effect above).
@@ -107,6 +109,8 @@
 <svelte:head>
 	<link rel="icon" href={favicon} />
 </svelte:head>
+
+<ThemeEffects />
 
 {#if auth.state === 'loading'}
 	<div class="gate-loading"></div>

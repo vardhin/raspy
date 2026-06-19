@@ -41,10 +41,13 @@
 		font-size: 1.6rem;
 		font-weight: var(--font-weight-bold);
 		letter-spacing: -0.01em;
+		/* Accent-tinted by the active theme; falls back to --fg if unset. */
+		color: var(--fg-accent, var(--fg));
 	}
 	.heading {
 		font-size: 1.2rem;
 		font-weight: var(--font-weight-bold);
+		color: var(--fg-accent, var(--fg));
 	}
 	.label {
 		font-size: 0.85rem;

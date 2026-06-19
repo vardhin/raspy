@@ -71,10 +71,7 @@
 		border-radius: var(--radius-md);
 		box-shadow: var(--shadow-sm);
 		cursor: pointer;
-		transition:
-			transform var(--motion-fast) var(--motion-ease),
-			box-shadow var(--motion-fast) var(--motion-ease),
-			filter var(--motion-fast) var(--motion-ease);
+		transition: var(--transition);
 	}
 
 	.ghost {
@@ -84,15 +81,16 @@
 
 	.btn:hover:not(:disabled) {
 		filter: brightness(1.08);
-		transform: translateY(calc(var(--depth) * -1px));
+		transform: translateY(var(--hover-lift));
+		box-shadow: var(--shadow-hover), var(--hover-glow);
 	}
 	.btn:active:not(:disabled) {
-		transform: translateY(0);
+		transform: scale(var(--press-scale));
 		filter: brightness(0.96);
 	}
 	.btn:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 	.btn:disabled {
 		opacity: 0.5;

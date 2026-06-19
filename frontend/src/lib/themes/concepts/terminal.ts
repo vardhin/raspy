@@ -28,6 +28,16 @@ export default {
 		'--space-3': '12px',
 		'--space-4': '16px',
 		'--space-5': '20px',
-		'--space-6': '28px'
-	}
+		'--space-6': '28px',
+		// interaction
+		'--shadow-hover': '0 0 14px color-mix(in srgb, var(--accent) 50%, transparent)',
+		'--hover-lift': '0',
+		'--hover-glow': '0 0 8px color-mix(in srgb, var(--accent) 50%, transparent)',
+		'--focus-ring': '0 0 0 2px var(--accent)',
+		'--press-scale': '1',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)',
+		'--fg-accent': 'var(--accent)'
+	},
+	effects: [{"kind":"scanlines","opacity":0.18}],
+	defaultFont: 'jetbrains-mono'
 } satisfies ConceptTheme;

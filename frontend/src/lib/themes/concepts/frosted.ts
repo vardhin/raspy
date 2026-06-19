@@ -27,6 +27,15 @@ export default {
 		'--space-4': '22px',
 		'--space-5': '30px',
 		'--space-6': '44px',
-		'--border-color': 'rgba(255,255,255,0.22)'
-	}
+		'--border-color': 'rgba(255,255,255,0.22)',
+		// interaction
+		'--shadow-hover': '0 12px 36px rgba(0,0,0,0.30)',
+		'--hover-lift': '-2px',
+		'--hover-glow': '0 0 28px color-mix(in srgb, var(--accent) 30%, transparent)',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent)',
+		'--press-scale': '0.98',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	effects: [{"kind":"breathe","opacity":0.25}],
+	defaultFont: 'dm-sans'
 } satisfies ConceptTheme;

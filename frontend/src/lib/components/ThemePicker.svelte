@@ -5,8 +5,9 @@
 	// Auto-lists whatever themes exist in the registry (no hardcoding), with a
 	// search box and a light/dark filter for the palette grid.
 	import { colorThemes, conceptThemes } from '$lib/themes/registry';
+	import { fontList, fontMap } from '$lib/themes/fonts/registry';
 	import { theme } from '$lib/themes/store.svelte';
-	import { Text, Icon } from '$lib/components';
+	import { Text, Icon, Switch } from '$lib/components';
 
 	let query = $state('');
 	let modeFilter = $state<'all' | 'dark' | 'light'>('all');
@@ -21,6 +22,16 @@
 	const concepts = $derived(
 		conceptThemes.filter((t) => t.name.toLowerCase().includes(query.toLowerCase()))
 	);
+	const fonts = $derived(
+		fontList.filter((f) => f.name.toLowerCase().includes(query.toLowerCase()))
+	);
+	// The font a null choice resolves to (the active concept's default), for the
+	// "Use concept default" tile's label.
+	const conceptDefaultFont = $derived(
+		theme.concept.defaultFont ? fontMap.get(theme.concept.defaultFont) : undefined
+	);
+	// True when no font is pinned → the font follows the active concept's default.
+	const usingDefault = $derived(theme.fontChoice === null);
 
 	// The four hues that best convey a palette at a glance.
 	const swatchKeys = ['--accent', '--success', '--warn', '--danger'] as const;
@@ -112,6 +123,66 @@
 			{/each}
 			{#if concepts.length === 0}<div class="empty">No styles match.</div>{/if}
 		</div>
+	</section>
+
+	<section>
+		<div class="section-head">
+			<Text role="heading">Font</Text>
+			<span class="hint">{fonts.length} fonts</span>
+		</div>
+		<div class="grid">
+			<!-- "Use concept default" — clears any pinned font (null), so the font
+			     follows whatever concept is active. -->
+			<button
+				class="tile font default"
+				class:sel={usingDefault}
+				onclick={() => theme.setFont(null)}
+				aria-pressed={usingDefault}
+			>
+				<div class="font-preview">
+					<span class="font-sample default-sample">Aa</span>
+				</div>
+				<div class="meta">
+					<span class="name">Concept default</span>
+					{#if usingDefault}<span class="tick"><Icon name="check" size={14} /></span>{/if}
+				</div>
+				<span class="badge"
+					>{conceptDefaultFont ? conceptDefaultFont.name : 'system'}</span
+				>
+			</button>
+
+			{#each fonts as f (f.id)}
+				{@const sel = theme.fontChoice === f.id}
+				<button
+					class="tile font"
+					class:sel
+					style:--p-font={f.stack}
+					onclick={() => theme.setFont(f.id)}
+					aria-pressed={sel}
+				>
+					<div class="font-preview">
+						<span class="font-sample">Aa</span>
+					</div>
+					<div class="meta">
+						<span class="name">{f.name}</span>
+						{#if sel}<span class="tick"><Icon name="check" size={14} /></span>{/if}
+					</div>
+					<span class="badge">{f.category}</span>
+				</button>
+			{/each}
+			{#if fonts.length === 0}<div class="empty">No fonts match.</div>{/if}
+		</div>
+	</section>
+
+	<section>
+		<div class="section-head">
+			<Text role="heading">Effects</Text>
+		</div>
+		<Switch
+			checked={theme.animations}
+			label="Animated background effects"
+			onchange={(on) => theme.setAnimations(on)}
+		/>
 	</section>
 </div>
 
@@ -223,13 +294,19 @@
 		border-radius: var(--radius-lg);
 		box-shadow: var(--shadow-sm);
 		cursor: pointer;
-		transition:
-			border-color var(--motion-fast) var(--motion-ease),
-			transform var(--motion-fast) var(--motion-ease);
+		transition: var(--transition);
 	}
 	.tile:hover {
-		transform: translateY(-2px);
+		transform: translateY(var(--hover-lift));
 		border-color: var(--accent);
+		box-shadow: var(--shadow-hover), var(--hover-glow);
+	}
+	.tile:active {
+		transform: scale(var(--press-scale));
+	}
+	.tile:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 	.tile.sel {
 		border-color: var(--accent);
@@ -293,6 +370,27 @@
 		color: var(--accent-fg);
 		background: var(--accent);
 		border-color: var(--accent);
+	}
+	/* Font tile: a big "Aa" rendered in the font itself. */
+	.font-preview {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 64px;
+		padding: var(--space-2);
+		background: var(--surface);
+		border: var(--border-width) solid var(--border-color);
+		border-radius: var(--radius-md);
+	}
+	.font-sample {
+		font-family: var(--p-font);
+		font-size: 2rem;
+		line-height: 1;
+		color: var(--fg);
+	}
+	.default-sample {
+		font-family: var(--font-sans);
+		color: var(--accent);
 	}
 	.meta {
 		display: flex;

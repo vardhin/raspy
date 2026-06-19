@@ -11,6 +11,7 @@ export default {
 		'--surface': '#f3f4f5',
 		'--surface-2': '#e7e8e9',
 		'--fg': '#5c6166',
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#8a9199',
 		'--border-color': '#d9dadb',
 		'--accent': '#fa8d3e', // ayu orange

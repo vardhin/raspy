@@ -29,6 +29,15 @@ export default {
 		'--space-4': '16px',
 		'--space-5': '24px',
 		'--space-6': '32px',
-		'--border-color': 'var(--fg)'
-	}
+		'--border-color': 'var(--fg)',
+		// interaction
+		'--shadow-hover': '4px 4px 0 var(--fg)',
+		'--hover-lift': '0',
+		'--hover-glow': '0 0 0 0 transparent',
+		'--focus-ring': '0 0 0 2px var(--accent)',
+		'--press-scale': '1',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	effects: [{"kind":"scanlines","opacity":0.15}],
+	defaultFont: 'space-mono'
 } satisfies ConceptTheme;

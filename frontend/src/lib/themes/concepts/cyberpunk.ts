@@ -32,6 +32,16 @@ export default {
 		'--space-4': '19px',
 		'--space-5': '27px',
 		'--space-6': '38px',
-		'--border-color': 'color-mix(in srgb, var(--accent) 70%, transparent)'
-	}
+		'--border-color': 'color-mix(in srgb, var(--accent) 70%, transparent)',
+		// interaction
+		'--shadow-hover': '0 0 20px color-mix(in srgb, var(--accent) 70%, transparent)',
+		'--hover-lift': '0',
+		'--hover-glow': '0 0 12px color-mix(in srgb, var(--accent) 80%, transparent), inset 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent)',
+		'--focus-ring': '0 0 0 2px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent)',
+		'--press-scale': '0.99',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)',
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 55%, var(--accent))'
+	},
+	effects: [{"kind":"scanlines","opacity":0.25},{"kind":"grid","opacity":0.18,"speed":0.5}],
+	defaultFont: 'orbitron'
 } satisfies ConceptTheme;

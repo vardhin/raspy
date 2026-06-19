@@ -13,6 +13,7 @@ export { default as Spinner } from './Spinner.svelte';
 export { default as Badge } from './Badge.svelte';
 export { default as Icon } from './Icon.svelte';
 export { default as ThemePicker } from './ThemePicker.svelte';
+export { default as ThemeEffects } from './ThemeEffects.svelte';
 export { default as WallpaperPicker } from './WallpaperPicker.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
 export { default as Modal } from './Modal.svelte';

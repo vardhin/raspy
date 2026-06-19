@@ -12,6 +12,7 @@ export default {
 		'--surface': '#e5e9f0', // nord5
 		'--surface-2': '#d8dee9', // nord4
 		'--fg': '#2e3440', // nord0
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#4c566a', // nord3
 		'--border-color': '#c2cad6',
 		'--accent': '#5e81ac', // nord10 (frost blue)

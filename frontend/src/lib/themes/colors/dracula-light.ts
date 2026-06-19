@@ -12,6 +12,7 @@ export default {
 		'--surface': '#f5f1e0', // current line
 		'--surface-2': '#efead3',
 		'--fg': '#1f1f1f', // foreground
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#6c664b', // comment
 		'--border-color': '#dcd7c0',
 		'--accent': '#644ac9', // purple

@@ -11,6 +11,7 @@ export default {
 		'--surface': '#d0d5e3', // bg_dark / float
 		'--surface-2': '#c4c8da', // bg_highlight
 		'--fg': '#3760bf', // day fg (blue-leaning)
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#7782ac', // comment
 		'--border-color': '#b6bcd1',
 		'--accent': '#2e7de9', // blue

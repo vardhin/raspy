@@ -11,6 +11,7 @@ export default {
 		'--surface': '#252525',
 		'--surface-2': '#0c0c0c',
 		'--fg': '#f2f4f8',
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#7b7c7e',
 		'--border-color': '#353535',
 		'--accent': '#78a9ff',

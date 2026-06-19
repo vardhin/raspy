@@ -26,6 +26,14 @@ export default {
 		'--space-3': '12px',
 		'--space-4': '16px',
 		'--space-5': '24px',
-		'--space-6': '32px'
-	}
+		'--space-6': '32px',
+		// interaction
+		'--shadow-hover': '0 6px 16px rgba(0,0,0,0.24)',
+		'--hover-lift': '-1px',
+		'--hover-glow': '0 0 0 0 transparent',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent)',
+		'--press-scale': '0.98',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	defaultFont: 'rubik'
 } satisfies ConceptTheme;

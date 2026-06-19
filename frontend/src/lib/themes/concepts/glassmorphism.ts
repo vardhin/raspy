@@ -29,6 +29,15 @@ export default {
 		'--space-5': '28px',
 		'--space-6': '40px',
 		// glass reads borders as a faint light edge
-		'--border-color': 'rgba(255,255,255,0.18)'
-	}
+		'--border-color': 'rgba(255,255,255,0.18)',
+		// interaction
+		'--shadow-hover': '0 14px 40px rgba(0,0,0,0.38)',
+		'--hover-lift': '-2px',
+		'--hover-glow': '0 0 30px color-mix(in srgb, var(--accent) 35%, transparent)',
+		'--focus-ring': '0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent)',
+		'--press-scale': '0.98',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	effects: [{"kind":"aurora","opacity":0.3,"speed":0.6}],
+	defaultFont: 'plus-jakarta-sans'
 } satisfies ConceptTheme;

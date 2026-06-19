@@ -12,6 +12,7 @@ export default {
 		'--surface': '#e7dba0', // lotusWhite4
 		'--surface-2': '#e4d794', // lotusWhite5
 		'--fg': '#545464', // lotusInk1
+		'--fg-accent': 'color-mix(in srgb, var(--fg) 86%, var(--accent))',
 		'--muted': '#766b90', // lotusViolet3 / gray ink
 		'--border-color': '#d5cea3', // lotusWhite2
 		'--accent': '#4d699b', // lotusBlue4 (indigo)

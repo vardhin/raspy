@@ -28,6 +28,14 @@ export default {
 		'--space-4': '26px',
 		'--space-5': '38px',
 		'--space-6': '54px',
-		'--border-color': 'transparent'
-	}
+		'--border-color': 'transparent',
+		// interaction
+		'--shadow-hover': '0 16px 38px rgba(0,0,0,0.24)',
+		'--hover-lift': '-3px',
+		'--hover-glow': '0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent)',
+		'--focus-ring': '0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent)',
+		'--press-scale': '0.95',
+		'--transition': 'background var(--motion-base) var(--motion-ease), color var(--motion-base) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease)'
+	},
+	defaultFont: 'nunito'
 } satisfies ConceptTheme;
