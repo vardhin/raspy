@@ -421,6 +421,9 @@
 		width: 100%;
 		height: 100%;
 		display: block;
+		/* The bar's drop-shadow glow extends past the viewBox edge; without this
+		   the SVG box clips it into a hard border. */
+		overflow: visible;
 	}
 	.ring .track {
 		fill: none;

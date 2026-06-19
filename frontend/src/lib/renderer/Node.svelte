@@ -53,6 +53,15 @@
 		(e.target as HTMLInputElement).checked = !!(row && node.bind && row[node.bind]);
 		if (node.action) await ctx.runAction(node.action, row);
 	}
+
+	async function onSurface(e: MouseEvent) {
+		if (!node.action) return;
+		// The row is a big tap target, but its own controls (checkbox, buttons,
+		// links, inputs) own their clicks — don't double-fire when one is hit.
+		const t = e.target as HTMLElement;
+		if (t.closest('button, input, a, label, select, textarea')) return;
+		await ctx.runAction(node.action, row);
+	}
 </script>
 
 {#if node.type === 'stack'}
@@ -68,7 +77,11 @@
 		{/each}
 	</Stack>
 {:else if node.type === 'surface'}
-	<Surface level={node.level ?? 1} interactive={node.interactive ?? false}>
+	<Surface
+		level={node.level ?? 1}
+		interactive={node.interactive ?? false}
+		onclick={node.action ? onSurface : undefined}
+	>
 		<Stack gap={3}>
 			{#each node.children ?? [] as child, i (i)}
 				<Self node={child} {row} />

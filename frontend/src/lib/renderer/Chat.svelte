@@ -183,7 +183,17 @@
 		<!-- Horizontal contact pill bar -->
 		<div class="pills" role="tablist" aria-label="Contacts">
 			{#each others as o (o.username)}
-				<button class="pill" class:on={active === o.username} role="tab" aria-selected={active === o.username} onclick={() => openConversation(o.username)} title={previewOf(o.username)}>
+				<button
+					class="pill"
+					class:on={active === o.username}
+					class:disabled={!o.has_key}
+					role="tab"
+					aria-selected={active === o.username}
+					aria-disabled={!o.has_key}
+					disabled={!o.has_key}
+					onclick={() => openConversation(o.username)}
+					title={o.has_key ? previewOf(o.username) : `${o.username} hasn't set up messaging yet`}
+				>
 					<span class="dot">{initial(o.username)}</span>
 					{o.username}
 				</button>
@@ -314,6 +324,10 @@
 	.pill.on {
 		background: var(--accent);
 		color: var(--accent-fg);
+	}
+	.pill.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 	.pill .dot {
 		width: 1.7rem;

@@ -175,11 +175,15 @@ export async function openTextFor(keypair: Keypair, sealedB64: string): Promise<
 
 export interface DirectoryEntry {
 	username: string;
-	public_key: string;
+	/** null when the account exists but hasn't published a key yet (never unlocked). */
+	public_key: string | null;
+	/** Whether this account can be sent to (has a published key). */
+	has_key: boolean;
 	role: 'admin' | 'child';
 }
 
-/** Every account that has published a key (the picker source). */
+/** Every account on the system (the picker source). Accounts without a published
+ *  key appear with `has_key: false` so the UI can show them but block sending. */
 export async function fetchDirectory(): Promise<DirectoryEntry[]> {
 	const res = await fetch(attUrl('identity', 'keys'), { credentials: 'include' });
 	if (!res.ok) throw new Error(`identity directory failed: ${res.status}`);

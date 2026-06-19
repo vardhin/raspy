@@ -387,6 +387,10 @@ class Todo(BaseAttachment):
                     empty="Nothing yet — add your first task.",
                     item=ui.surface(
                         interactive=True,
+                        # Tapping anywhere on the row toggles done — the checkbox
+                        # is a tiny target, so the whole row is the hit area.
+                        # Clicks on inner controls (priority/delete) don't bubble.
+                        action=ui.post("items/{id}/toggle"),
                         children=[
                             ui.row(
                                 justify="between",

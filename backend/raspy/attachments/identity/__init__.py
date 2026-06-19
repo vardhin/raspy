@@ -93,21 +93,28 @@ class Identity(BaseAttachment):
 
         @r.get("/keys")
         async def list_keys() -> list[dict[str, Any]]:
-            """The public directory: every account that has published a key, with
-            its public key only (no wrapped secret). This is the source for the
-            account picker in the dropbox/chat apps."""
+            """The account directory and source for the dropbox/chat pickers.
+
+            Returns *every* account on the system, not just ones that have
+            published a key — otherwise an account that exists but has never
+            unlocked its vault (and so never published) would be invisible in the
+            picker, making it impossible to know it's there. Accounts without a
+            published key carry ``public_key: null`` / ``has_key: false`` so the
+            UI can list them but disable sending (you can't seal to a missing
+            key). The wrapped secret is never exposed here."""
             accounts = await self.ctx.list_accounts()
-            roles = {a["username"]: a.get("role", "admin") for a in accounts}
             rows = await self.db.fetch_all(
-                f"SELECT username, public_key, created FROM {_TABLE} ORDER BY username"
+                f"SELECT username, public_key FROM {_TABLE}"
             )
+            keys = {row["username"]: row["public_key"] for row in rows}
             return [
                 {
-                    "username": row["username"],
-                    "public_key": row["public_key"],
-                    "role": roles.get(row["username"], "admin"),
+                    "username": a["username"],
+                    "public_key": keys.get(a["username"]),
+                    "has_key": a["username"] in keys,
+                    "role": a.get("role", "admin"),
                 }
-                for row in rows
+                for a in sorted(accounts, key=lambda a: a["username"])
             ]
 
         @r.get("/key/{username}")

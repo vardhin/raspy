@@ -112,8 +112,40 @@ def test_identity_publish_and_list(two_clients):
     assert by[_CHILD]["public_key"] == "CHILD_PK"
     assert by[_TEST_USER]["role"] == "admin"
     assert by[_CHILD]["role"] == "child"
+    assert by[_TEST_USER]["has_key"] is True
+    assert by[_CHILD]["has_key"] is True
     for e in dirr:
         assert "sk_wrapped" not in e and "sk_nonce" not in e
+
+
+def test_admin_grantable_apps_excludes_identity(two_clients):
+    # The per-account permission checklist must not offer `identity`: it's a
+    # backend-only utility (no sidebar app, always reachable), so granting it is
+    # meaningless and confusing. Admin-only apps are excluded too.
+    admin, _ = two_clients
+    apps = admin.get("/api/auth/admin/apps").json()
+    ids = {a["id"] for a in apps}
+    assert "identity" not in ids
+    assert "accounts" not in ids  # admin-only, also excluded
+    assert "dropbox" in ids and "chat" in ids  # real, grantable apps still listed
+
+
+def test_identity_list_includes_accounts_without_keys(two_clients):
+    # An account that exists but has never published a key (never unlocked its
+    # vault) must still appear in the directory so the picker can show it — just
+    # marked as not-sendable. Only the child publishes here.
+    admin, child = two_clients
+    child.put(
+        "/api/att/identity/me",
+        json={"public_key": "CHILD_PK", "sk_wrapped": "CHILD_SKW", "sk_nonce": "N2"},
+    )
+    by = {e["username"]: e for e in admin.get("/api/att/identity/keys").json()}
+    # The admin never published: still listed, but with no key.
+    assert by[_TEST_USER]["has_key"] is False
+    assert by[_TEST_USER]["public_key"] is None
+    # The child published: sendable.
+    assert by[_CHILD]["has_key"] is True
+    assert by[_CHILD]["public_key"] == "CHILD_PK"
 
 
 def test_identity_me_roundtrip_and_isolation(two_clients):

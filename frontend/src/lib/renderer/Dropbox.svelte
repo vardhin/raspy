@@ -104,15 +104,16 @@
 			return;
 		}
 		const rec = directory.find((d) => d.username === selectedRecipient);
-		if (!rec) {
+		if (!rec || !rec.public_key) {
 			error = 'That account has no published key yet.';
 			return;
 		}
+		const recKey = rec.public_key;
 		error = null;
 		sending = true;
 		try {
 			for (let i = 0; i < list.length; i++) {
-				await sendFile(rec.username, rec.public_key, list[i], 'drop', (f) => {
+				await sendFile(rec.username, recKey, list[i], 'drop', (f) => {
 					sendPct = (i + f) / list.length;
 				});
 			}
@@ -233,7 +234,7 @@
 				<Stack gap={3}>
 					<Text role="muted">Pick an account, then choose or drag files. They're encrypted so only that account can open them.</Text>
 					<AccountPicker
-						accounts={recipients.map((r) => ({ username: r.username, role: r.role }))}
+						accounts={recipients.map((r) => ({ username: r.username, role: r.role, disabled: !r.has_key }))}
 						bind:selected={selectedRecipient}
 					/>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->

@@ -6,7 +6,13 @@
 	import Text from './Text.svelte';
 	import Badge from './Badge.svelte';
 
-	type Account = { username: string; role?: 'admin' | 'child'; subtitle?: string };
+	type Account = {
+		username: string;
+		role?: 'admin' | 'child';
+		subtitle?: string;
+		/** When false, the row is shown but cannot be selected (no published key). */
+		disabled?: boolean;
+	};
 
 	let {
 		accounts,
@@ -18,9 +24,10 @@
 		onselect?: (username: string) => void;
 	} = $props();
 
-	function pick(username: string) {
-		selected = username;
-		onselect?.(username);
+	function pick(a: Account) {
+		if (a.disabled) return;
+		selected = a.username;
+		onselect?.(a.username);
 	}
 
 	function initial(name: string): string {
@@ -34,14 +41,18 @@
 			type="button"
 			class="account"
 			class:selected={selected === a.username}
+			class:disabled={a.disabled}
 			role="option"
 			aria-selected={selected === a.username}
-			onclick={() => pick(a.username)}
+			aria-disabled={a.disabled}
+			disabled={a.disabled}
+			onclick={() => pick(a)}
 		>
 			<span class="avatar" aria-hidden="true">{initial(a.username)}</span>
 			<span class="meta">
 				<Text role="label">{a.username}</Text>
-				{#if a.subtitle}<Text role="muted">{a.subtitle}</Text>{/if}
+				{#if a.disabled}<Text role="muted">Hasn't set up messaging yet</Text>
+				{:else if a.subtitle}<Text role="muted">{a.subtitle}</Text>{/if}
 			</span>
 			{#if a.role}<Badge variant={a.role === 'admin' ? 'accent' : 'neutral'}>{a.role}</Badge>{/if}
 		</button>
@@ -77,6 +88,13 @@
 	.account.selected {
 		background: color-mix(in srgb, var(--accent) 18%, transparent);
 		border-color: var(--border-color);
+	}
+	.account.disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+	.account.disabled:hover {
+		background: transparent;
 	}
 	.avatar {
 		flex: none;

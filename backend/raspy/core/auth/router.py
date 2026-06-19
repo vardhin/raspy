@@ -234,14 +234,16 @@ async def complete_setup(
 @router.get("/admin/apps")
 async def admin_list_apps(request: Request, _=Depends(require_admin)):
     """Grantable apps (id/title/icon) for the per-account permission checklist —
-    excludes admin-only apps that can't be isolated (accounts/files/stats)."""
-    from ..manifest import _ADMIN_ONLY
+    excludes admin-only apps that can't be isolated (accounts/files/stats) and
+    backend-only utilities with no sidebar app (e.g. identity), which aren't
+    grantable: they're hidden from every manifest and always reachable anyway."""
+    from ..manifest import _ADMIN_ONLY, _HIDDEN
 
     registry = request.app.state.registry
     return [
         {"id": e["id"], "title": e["title"], "icon": e["icon"]}
         for e in registry.manifest()
-        if e["id"] not in _ADMIN_ONLY
+        if e["id"] not in _ADMIN_ONLY and e["id"] not in _HIDDEN
     ]
 
 

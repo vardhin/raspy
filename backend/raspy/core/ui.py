@@ -54,8 +54,19 @@ def row(children: list[UINode], *, gap: int = 2, **kw: Any) -> UINode:
     return stack(children, direction="row", gap=gap, **kw)
 
 
-def surface(children: list[UINode], *, level: int = 1, interactive: bool = False) -> UINode:
-    return _node("surface", level=level, interactive=interactive, children=children)
+def surface(
+    children: list[UINode],
+    *,
+    level: int = 1,
+    interactive: bool = False,
+    action: dict[str, Any] | None = None,
+) -> UINode:
+    """A container. When given an ``action``, clicking the surface (anywhere not
+    on an inner control like a button or checkbox) fires it — handy for making a
+    whole list row tappable (e.g. tap a todo to toggle it)."""
+    return _node(
+        "surface", level=level, interactive=interactive, action=action, children=children
+    )
 
 
 # --- content ----------------------------------------------------------------
