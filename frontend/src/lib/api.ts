@@ -242,6 +242,16 @@ export function apiPost<T = unknown>(path: string, body?: unknown): Promise<T> {
 	});
 }
 
+/** PUT to a core (non-attachment) spine endpoint with the usual auth/CSRF/channel. */
+export function apiPut<T = unknown>(path: string, body?: unknown): Promise<T> {
+	return request<T>(apiUrl(path), {
+		method: 'PUT',
+		...(body !== undefined
+			? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+			: {})
+	});
+}
+
 /** GET a list/object from an attachment's API (relative path). */
 export function attGet<T = unknown>(attachmentId: string, path: string): Promise<T> {
 	return request<T>(attUrl(attachmentId, path));

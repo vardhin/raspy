@@ -122,16 +122,111 @@ class Updater:
         # check doesn't nag every interval for the same release.
         self._notified_version: str | None = None
         self._applying = False
+        # An admin can toggle/retune the periodic check at runtime from the
+        # Updates app; the override survives restarts in a small JSON file (the
+        # layered config.toml is read-only at runtime). Absent => use settings.
+
+    def _autocheck_path(self) -> Path:
+        return self._settings.data_dir / "update_autocheck.json"
+
+    def _autocheck_override(self) -> dict | None:
+        try:
+            return json.loads(self._autocheck_path().read_text())
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            log.info("autocheck override unreadable: %s", exc)
+            return None
+
+    def autocheck(self) -> dict:
+        """Current periodic-check config: the override if set, else the settings
+        default. ``interval_s <= 0`` (or ``enabled=False``) means disabled."""
+        ov = self._autocheck_override()
+        if ov is not None:
+            interval = int(ov.get("interval_s", self._settings.update_check_interval_s))
+            enabled = bool(ov.get("enabled", interval > 0)) and interval > 0
+        else:
+            interval = int(self._settings.update_check_interval_s)
+            enabled = interval > 0
+        return {"enabled": enabled, "interval_s": interval}
+
+    def set_autocheck(self, *, enabled: bool, interval_s: int) -> dict:
+        interval_s = max(0, int(interval_s))
+        self._autocheck_path().write_text(
+            json.dumps({"enabled": bool(enabled), "interval_s": interval_s})
+        )
+        # Restart the loop so the new cadence (or disable) takes effect now.
+        self.restart_loop()
+        return self.autocheck()
 
     # ── release metadata ────────────────────────────────────────────────────
     def _latest_json_url(self) -> str:
         return f"https://github.com/{self._repo}/releases/latest/download/latest.json"
 
-    def _asset_url(self, name: str) -> str:
-        return f"https://github.com/{self._repo}/releases/latest/download/{name}"
+    def _asset_url(self, name: str, tag: str | None = None) -> str:
+        """Asset download URL. ``tag=None`` uses the ``latest`` pointer; a tag
+        targets that specific release (so an admin can install any version)."""
+        ref = f"download/{tag}" if tag else "latest/download"
+        return f"https://github.com/{self._repo}/releases/{ref}/{name}"
 
-    def _sums_url(self) -> str:
-        return f"https://github.com/{self._repo}/releases/latest/download/SHA256SUMS"
+    def _sums_url(self, tag: str | None = None) -> str:
+        ref = f"download/{tag}" if tag else "latest/download"
+        return f"https://github.com/{self._repo}/releases/{ref}/SHA256SUMS"
+
+    def _releases_api_url(self) -> str:
+        return f"https://api.github.com/repos/{self._repo}/releases?per_page=30"
+
+    async def list_releases(self) -> dict:
+        """All published releases (newest first) with notes + whether this
+        platform's asset is present, plus which one is currently installed.
+
+        Powers the admin Updates app's version picker. Network + parse run in a
+        thread so the event loop is never blocked.
+        """
+        asset = _asset_name()
+        updatable = is_frozen() and asset is not None
+        try:
+            raw = await asyncio.to_thread(_fetch, self._releases_api_url())
+            data = json.loads(raw.decode())
+        except Exception as exc:
+            log.info("release list failed: %s", exc)
+            return {
+                "current": __version__,
+                "updatable": updatable,
+                "asset": asset,
+                "releases": [],
+                "reason": f"list failed: {exc}",
+            }
+        releases = []
+        for rel in data:
+            if rel.get("draft"):
+                continue
+            tag = str(rel.get("tag_name") or "")
+            version = tag.lstrip("v")
+            names = {a.get("name") for a in rel.get("assets") or []}
+            releases.append(
+                {
+                    "tag": tag,
+                    "version": version,
+                    "name": rel.get("name") or tag,
+                    "notes": rel.get("body") or "",
+                    "published_at": rel.get("published_at"),
+                    "prerelease": bool(rel.get("prerelease")),
+                    # Can we actually install this on the running platform?
+                    "installable": bool(updatable and asset and asset in names),
+                    "is_current": version == __version__,
+                    "is_newer": bool(version and is_newer(version)),
+                }
+            )
+        return {
+            "current": __version__,
+            "updatable": updatable,
+            "asset": asset,
+            "releases": releases,
+            "reason": None if updatable else (
+                "not a frozen binary" if not is_frozen() else "unknown platform"
+            ),
+        }
 
     async def check(self) -> UpdateInfo:
         """Look up the latest release version. Network + parse run in a thread so
@@ -158,21 +253,35 @@ class Updater:
         )
 
     # ── apply ───────────────────────────────────────────────────────────────
-    async def apply(self) -> dict:
-        """Download + verify + swap the new binary, then restart. Returns a dict
-        describing the action; on a successful restart the process exits and the
-        caller never sees a normal return."""
+    async def apply(self, target: str | None = None) -> dict:
+        """Download + verify + swap a binary, then restart. ``target`` is a release
+        tag (e.g. ``v0.4.0``) to install a *specific* version — up or down, so the
+        admin can roll back; ``None`` installs the latest available update. Returns
+        a dict describing the action; on a successful restart the process exits and
+        the caller never sees a normal return."""
         if self._applying:
             return {"ok": False, "error": "an update is already in progress"}
-        info = await self.check()
-        if not info.updatable:
-            return {"ok": False, "error": info.reason or "not updatable"}
-        if not info.available:
-            return {"ok": False, "error": "already up to date", "current": info.current}
-        assert info.asset
+        asset = _asset_name()
+        if not (is_frozen() and asset):
+            reason = "not a frozen binary" if not is_frozen() else "unknown platform"
+            return {"ok": False, "error": reason}
+
+        if target is None:
+            # Latest-update path: keep the existing "are we behind?" guard.
+            info = await self.check()
+            if not info.available:
+                return {"ok": False, "error": "already up to date", "current": info.current}
+            to = info.latest
+        else:
+            # Specific-version path: install exactly this tag (allows downgrade).
+            target = target if target.startswith("v") else f"v{target}"
+            to = target.lstrip("v")
+            if to == __version__:
+                return {"ok": False, "error": "already on this version", "current": __version__}
+
         self._applying = True
         try:
-            new_path = await asyncio.to_thread(self._download_verified, info.asset)
+            new_path = await asyncio.to_thread(self._download_verified, asset, target)
             await asyncio.to_thread(self._swap, new_path)
         except Exception as exc:
             self._applying = False
@@ -180,20 +289,20 @@ class Updater:
             return {"ok": False, "error": str(exc)}
         # Swap succeeded. Schedule the restart slightly later so this HTTP
         # response can flush to the browser before we go down.
-        log.warning("update applied: %s -> %s; restarting", info.current, info.latest)
+        log.warning("update applied: %s -> %s; restarting", __version__, to)
         asyncio.get_running_loop().call_later(0.5, self._restart)
-        return {"ok": True, "from": info.current, "to": info.latest, "restarting": True}
+        return {"ok": True, "from": __version__, "to": to, "restarting": True}
 
-    def _download_verified(self, asset: str) -> Path:
+    def _download_verified(self, asset: str, tag: str | None = None) -> Path:
         tmpdir = Path(tempfile.mkdtemp(prefix="raspy-update-"))
         target = tmpdir / asset
-        log.info("downloading update asset %s", asset)
-        data = _fetch(self._asset_url(asset), timeout=120.0)
+        log.info("downloading update asset %s (%s)", asset, tag or "latest")
+        data = _fetch(self._asset_url(asset, tag), timeout=120.0)
         target.write_bytes(data)
 
         # Verify against SHA256SUMS (published alongside the binaries).
         try:
-            sums = _fetch(self._sums_url(), timeout=20.0).decode()
+            sums = _fetch(self._sums_url(tag), timeout=20.0).decode()
         except Exception as exc:
             raise RuntimeError(f"could not fetch SHA256SUMS: {exc}") from exc
         want = None
@@ -271,11 +380,23 @@ class Updater:
 
     # ── periodic background check + notify ──────────────────────────────────
     def start(self) -> None:
-        interval = self._settings.update_check_interval_s
-        if interval <= 0:
+        cfg = self.autocheck()
+        if not cfg["enabled"]:
             log.info("periodic update checks disabled")
             return
-        self._task = asyncio.create_task(self._loop(interval))
+        self._task = asyncio.create_task(self._loop(cfg["interval_s"]))
+
+    def restart_loop(self) -> None:
+        """Cancel the running loop and start one with the current autocheck
+        config — called when an admin changes the toggle/interval at runtime."""
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._task = None
+        cfg = self.autocheck()
+        if cfg["enabled"]:
+            self._task = asyncio.create_task(self._loop(cfg["interval_s"]))
+        else:
+            log.info("periodic update checks disabled")
 
     async def stop(self) -> None:
         if self._task:

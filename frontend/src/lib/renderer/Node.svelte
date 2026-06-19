@@ -20,6 +20,7 @@
 	import Dropbox from './Dropbox.svelte';
 	import Chat from './Chat.svelte';
 	import Pomodoro from './Pomodoro.svelte';
+	import Updates from './Updates.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -201,6 +202,8 @@
 	<Chat />
 {:else if node.type === 'pomodoro'}
 	<Pomodoro />
+{:else if node.type === 'updates'}
+	<Updates />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

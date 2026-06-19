@@ -302,6 +302,17 @@ def dropbox(*, title: str | None = None) -> UINode:
     return _node("dropbox", title=title)
 
 
+def updates(*, title: str | None = None) -> UINode:
+    """The admin-only self-update UI. The shell component reads the core update
+    endpoints (``GET /api/update/status|releases|autocheck``, ``POST
+    /api/update/check|apply``, ``PUT /api/update/autocheck``) to show the current
+    version, list every published release with notes, install any version (upgrade
+    or rollback) with a one-click verified swap + restart, and toggle the periodic
+    auto-check. One composite Tier-1 node; the endpoints are core (not
+    attachment-namespaced), so this node ships no wiring of its own."""
+    return _node("updates", title=title)
+
+
 def pomodoro(*, title: str | None = None) -> UINode:
     """The Pomodoro focus-timer UI — a server-authoritative session the shell
     drives and renders as a beautiful animated countdown.

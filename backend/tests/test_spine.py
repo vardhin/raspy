@@ -194,6 +194,39 @@ class TestNotes:
         assert client.get("/api/att/notes/notes").json() == []
 
 
+class TestUpdates:
+    def test_app_is_discovered_and_admin_only(self, client):
+        # The updates app loads and is mounted (router admin-gated).
+        h = client.get("/api/healthz").json()
+        loaded = {a["id"] for a in h["attachments"]["loaded"]}
+        assert "updates" in loaded
+        # The seeded `client` is the original admin, so the manifest includes it.
+        ids = {a["id"] for a in client.get("/api/manifest").json()["attachments"]}
+        assert "updates" in ids
+
+    def test_autocheck_get_and_set_round_trip(self, client):
+        # No network: pure local override file.
+        cfg = client.get("/api/update/autocheck").json()
+        assert set(cfg) == {"enabled", "interval_s"}
+        # Disable
+        off = client.put(
+            "/api/update/autocheck", json={"enabled": False, "interval_s": 0}
+        ).json()
+        assert off["enabled"] is False
+        assert client.get("/api/update/autocheck").json()["enabled"] is False
+        # Re-enable with a custom interval
+        on = client.put(
+            "/api/update/autocheck", json={"enabled": True, "interval_s": 3600}
+        ).json()
+        assert on == {"enabled": True, "interval_s": 3600}
+
+    def test_apply_rejects_when_not_frozen(self, client):
+        # Tests don't run a frozen binary, so apply must refuse before any network.
+        res = client.post("/api/update/apply", json={"target": "v0.0.1"}).json()
+        assert res["ok"] is False
+        assert "frozen" in res["error"] or "platform" in res["error"]
+
+
 def test_attachment_data_isolation(client):
     # todo and notes use separately-prefixed tables; creating in one doesn't leak.
     client.post("/api/att/todo/items", json={"title": "t"})

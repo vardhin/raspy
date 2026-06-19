@@ -23,7 +23,8 @@ router = APIRouter()
 #   files    — browses the Pi's single shared home dir (~); can't be isolated.
 #   stats    — system-wide host metrics; nothing per-account about them.
 #   connectivity — controls public internet exposure (tunnels); admin-only by design.
-_ADMIN_ONLY = {"accounts", "files", "stats", "connectivity", "terminal"}
+#   updates  — swaps the running binary for the whole box; admin-only by design.
+_ADMIN_ONLY = {"accounts", "files", "stats", "connectivity", "terminal", "updates"}
 
 # Backend-only utility attachments: loaded and routed, but never shown as a sidebar
 # app to anyone (no UI descriptor of their own). ``identity`` is the public-key

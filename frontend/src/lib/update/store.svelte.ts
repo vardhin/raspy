@@ -85,14 +85,17 @@ class UpdateStore {
 	}
 
 	/** Download + verify + swap + restart. On success the spine restarts; we show
-	 *  a "restarting" state and let connection.svelte flip offline→online. */
-	async apply(): Promise<void> {
+	 *  a "restarting" state and let connection.svelte flip offline→online.
+	 *  `target` is an optional release tag to install a specific version (rollback
+	 *  or any version); omit it to install the latest available update. */
+	async apply(target?: string): Promise<void> {
 		if (this.phase === 'applying' || this.phase === 'restarting') return;
 		this.phase = 'applying';
 		this.error = null;
 		try {
 			const res = await apiPost<{ ok: boolean; error?: string; restarting?: boolean }>(
-				'/api/update/apply'
+				'/api/update/apply',
+				target ? { target } : undefined
 			);
 			if (res.ok) {
 				this.phase = 'restarting';
