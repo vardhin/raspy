@@ -19,6 +19,7 @@
 	import Terminal from './Terminal.svelte';
 	import Dropbox from './Dropbox.svelte';
 	import Chat from './Chat.svelte';
+	import Pomodoro from './Pomodoro.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -80,17 +81,28 @@
 		{boundText()}
 	</Text>
 {:else if node.type === 'badge'}
-	<Badge
-		variant={(node.variant as 'neutral' | 'accent' | 'success' | 'warn' | 'danger' | 'info') ??
-			'neutral'}
-	>
-		{boundText()}
-	</Badge>
+	{@const badgeText = boundText()}
+	{#if !(node.hide_when_empty && badgeText === '')}
+		<Badge
+			variant={((node.variant_bind && row
+				? (row[node.variant_bind] as string)
+				: node.variant) as
+				| 'neutral'
+				| 'accent'
+				| 'success'
+				| 'warn'
+				| 'danger'
+				| 'info') ?? 'neutral'}
+		>
+			{badgeText}
+		</Badge>
+	{/if}
 {:else if node.type === 'divider'}
 	<hr class="divider" />
 {:else if node.type === 'input'}
 	<Field
-		type={(node.kind as 'text' | 'number' | 'password' | 'email' | 'textarea') ?? 'text'}
+		type={(node.kind as 'text' | 'number' | 'password' | 'email' | 'textarea' | 'date') ??
+			'text'}
 		label={node.label ?? ''}
 		placeholder={node.placeholder ?? ''}
 		value={(ctx.fields[node.name ?? ''] as string) ?? ''}
@@ -113,12 +125,16 @@
 		</span>
 	</label>
 {:else if node.type === 'button'}
+	{@const btnLabel = node.bind && row ? String(row[node.bind] ?? '') : node.text}
 	<Button
-		variant={(node.variant as 'accent' | 'neutral' | 'ghost' | 'success' | 'warn' | 'danger') ??
+		variant={((node.variant_bind && row
+			? (row[node.variant_bind] as string)
+			: node.variant) as 'accent' | 'neutral' | 'ghost' | 'success' | 'warn' | 'danger') ??
 			'accent'}
+		size={(node.size as 'sm' | 'md' | 'lg') ?? 'md'}
 		onclick={onButton}
 	>
-		{node.text}
+		{btnLabel || node.empty_label || node.text}
 	</Button>
 {:else if node.type === 'list'}
 	{@const rows = (ctx.sources[node.source ?? ''] ?? []) as Record<string, unknown>[]}
@@ -183,6 +199,8 @@
 	<Dropbox />
 {:else if node.type === 'chat'}
 	<Chat />
+{:else if node.type === 'pomodoro'}
+	<Pomodoro />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}

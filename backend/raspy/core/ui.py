@@ -70,8 +70,26 @@ def text(value: str, *, role: str = "body", bind: str | None = None) -> UINode:
     return _node("text", text=value, role=role, bind=bind)
 
 
-def badge(value: str, *, variant: str = "neutral", bind: str | None = None) -> UINode:
-    return _node("badge", text=value, variant=variant, bind=bind)
+def badge(
+    value: str,
+    *,
+    variant: str = "neutral",
+    bind: str | None = None,
+    variant_bind: str | None = None,
+    hide_when_empty: bool = False,
+) -> UINode:
+    """A status pill. ``bind`` reads its text from a row field; ``variant_bind``
+    reads its themed variant (neutral/accent/success/warn/danger/info) from a row
+    field, so each row can color its own badge. ``hide_when_empty`` drops the badge
+    entirely when its bound text is empty (e.g. a "none" priority)."""
+    return _node(
+        "badge",
+        text=value,
+        variant=variant,
+        bind=bind,
+        variant_bind=variant_bind,
+        hide_when_empty=hide_when_empty or None,
+    )
 
 
 def divider() -> UINode:
@@ -100,8 +118,25 @@ def button(
     *,
     action: dict[str, Any],
     variant: str = "accent",
+    bind: str | None = None,
+    variant_bind: str | None = None,
+    empty_label: str | None = None,
+    size: str | None = None,
 ) -> UINode:
-    return _node("button", text=label, action=action, variant=variant)
+    """A button. In a list row, ``bind`` makes the label read a row field and
+    ``variant_bind`` makes the themed variant read a row field, so a per-row
+    control (e.g. a priority chip you click to cycle) styles itself from data.
+    ``empty_label`` is shown when the bound label is empty."""
+    return _node(
+        "button",
+        text=label,
+        action=action,
+        variant=variant,
+        bind=bind,
+        variant_bind=variant_bind,
+        empty_label=empty_label,
+        size=size,
+    )
 
 
 def select(name: str, options: list[dict[str, str]], *, label: str | None = None) -> UINode:
@@ -265,6 +300,22 @@ def dropbox(*, title: str | None = None) -> UINode:
     node; all crypto in the client.
     """
     return _node("dropbox", title=title)
+
+
+def pomodoro(*, title: str | None = None) -> UINode:
+    """The Pomodoro focus-timer UI — a server-authoritative session the shell
+    drives and renders as a beautiful animated countdown.
+
+    The backend owns the session (phase, end time, pause state, optional linked
+    todo) via ``GET /state``, ``POST /start|pause|resume|reset`` and
+    ``GET/PUT /settings``; it fires a notification when a running phase ends, even
+    with no client open (durable scheduler). The shell component shows a circular
+    countdown, lets you pick a todo to focus on (read from the todo attachment's
+    ``items``), and on Start enters an immersive fullscreen view (real Fullscreen
+    API where allowed, full-viewport overlay otherwise) with an Esc/exit control.
+    One composite Tier-1 node, no shipped client code.
+    """
+    return _node("pomodoro", title=title)
 
 
 def chat(*, title: str | None = None) -> UINode:

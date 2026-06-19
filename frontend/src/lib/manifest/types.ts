@@ -25,6 +25,10 @@ export interface UINode {
 	text?: string;
 	role?: string;
 	variant?: string;
+	variant_bind?: string;
+	hide_when_empty?: boolean;
+	empty_label?: string;
+	size?: string;
 	bind?: string;
 	// inputs
 	name?: string;
