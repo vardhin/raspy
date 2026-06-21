@@ -81,6 +81,26 @@ class TestTodo:
         order = [i["title"] for i in client.get("/api/att/todo/items").json()]
         assert order == ["b", "a"]
 
+    def test_drag_reorder_sets_manual_order(self, client):
+        # Three same-priority items keep insertion order by default…
+        a = client.post("/api/att/todo/items", json={"title": "a"}).json()
+        b = client.post("/api/att/todo/items", json={"title": "b"}).json()
+        c = client.post("/api/att/todo/items", json={"title": "c"}).json()
+        order = [i["title"] for i in client.get("/api/att/todo/items").json()]
+        assert order == ["a", "b", "c"]
+        # …a drag-reorder rewrites positions to the requested order.
+        r = client.patch(
+            "/api/att/todo/items/order", json={"order": [c["id"], a["id"], b["id"]]}
+        )
+        assert r.status_code == 204
+        order = [i["title"] for i in client.get("/api/att/todo/items").json()]
+        assert order == ["c", "a", "b"]
+
+    def test_reorder_path_not_shadowed_by_item_id(self, client):
+        # "/items/order" must resolve to the reorder route, not be parsed as an
+        # item id (which would 422 on the int path param).
+        assert client.patch("/api/att/todo/items/order", json={"order": []}).status_code == 204
+
     def test_priority_sets_sorts_and_cycles(self, client):
         # priority accepts a string (declarative select sends strings) and clamps.
         lo = client.post(

@@ -163,13 +163,22 @@ def list_(
     item: UINode,
     key: str = "id",
     empty: str | None = None,
+    reorder: dict[str, Any] | None = None,
 ) -> UINode:
     """A list whose rows come from ``GET /api/att/<id>/<source>``.
 
     ``item`` is a template UINode rendered per row; its ``bind`` props read fields
     from each row object. ``{id}`` in nested actions is substituted per row.
+
+    ``reorder`` makes rows drag-reorderable: pass the action (e.g.
+    ``ui.patch("items/order")``) the shell calls with ``{"order": [<key>, …]}``
+    in the new top-to-bottom order. A drag handle appears on each row; the shell
+    optimistically reorders, then fires the action. Stays Tier-1 (pure data +
+    wiring), so it ports to a Flutter renderer too.
     """
-    return _node("list", source=source, item=item, key=key, empty=empty)
+    return _node(
+        "list", source=source, item=item, key=key, empty=empty, reorder=reorder
+    )
 
 
 def table(*, source: str, columns: list[dict[str, str]], key: str = "id") -> UINode:
@@ -259,6 +268,19 @@ def vault(*, title: str | None = None) -> UINode:
     the contract is just opaque-blob storage + an encrypted manifest.
     """
     return _node("vault", title=title)
+
+
+def passwords(*, title: str | None = None) -> UINode:
+    """The zero-knowledge password keeper UI. The backend is a *dumb* store: it
+    holds ONE opaque encrypted blob per account (``GET/PUT/DELETE
+    /api/att/passwords/store``) and never sees a plaintext field. The shell
+    component fetches + decrypts the blob under the vault master key to render the
+    list of credentials (title, username, password, url, note), copies fields to
+    the clipboard, reveals passwords on demand, and re-encrypts + uploads the whole
+    list on any add/edit/delete/reorder. Flutter-portable: the contract is just
+    opaque-blob storage; all crypto is in the client.
+    """
+    return _node("passwords", title=title)
 
 
 def contacts(*, title: str | None = None) -> UINode:

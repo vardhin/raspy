@@ -70,6 +70,11 @@
 	import Paperclip from 'lucide-svelte/icons/paperclip';
 	import Send from 'lucide-svelte/icons/send';
 	import Key from 'lucide-svelte/icons/key';
+	import GripVertical from 'lucide-svelte/icons/grip-vertical';
+	import Copy from 'lucide-svelte/icons/copy';
+	import Eye from 'lucide-svelte/icons/eye';
+	import EyeOff from 'lucide-svelte/icons/eye-off';
+	import ExternalLink from 'lucide-svelte/icons/external-link';
 	import type { ComponentType } from 'svelte';
 
 	let { name = 'square', size = 18 }: { name?: string; size?: number } = $props();
@@ -141,7 +146,12 @@
 		'message-circle': MessageCircle,
 		paperclip: Paperclip,
 		send: Send,
-		key: Key
+		key: Key,
+		'grip-vertical': GripVertical,
+		copy: Copy,
+		eye: Eye,
+		'eye-off': EyeOff,
+		'external-link': ExternalLink
 	};
 
 	const Glyph = $derived(icons[name] ?? icons.square);

@@ -42,6 +42,8 @@ export interface UINode {
 	item?: UINode;
 	key?: string;
 	empty?: string;
+	/** When set, list rows are drag-reorderable; this action receives `{order:[…]}`. */
+	reorder?: Action;
 	columns?: Array<{ key: string; label: string }>;
 	// file manager
 	list_source?: string;

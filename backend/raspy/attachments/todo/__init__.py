@@ -80,6 +80,12 @@ class TodoUpdate(BaseModel):
     _norm_due = field_validator("due", mode="before")(_coerce_due)
 
 
+class TodoReorder(BaseModel):
+    # The desired top-to-bottom order of item ids after a drag. Bounded so a
+    # malformed client can't ask us to rewrite an unbounded number of rows.
+    order: list[int] = Field(max_length=10_000)
+
+
 class Todo(BaseAttachment):
     id = "todo"
     title = "Todo"
@@ -196,6 +202,24 @@ class Todo(BaseAttachment):
             )
             self._wake.set()  # a new due date may be sooner than the current sleep
             return item
+
+        # Declared before "/items/{item_id}" so the literal "order" path isn't
+        # captured as an item id (FastAPI matches routes in declaration order).
+        @r.patch("/items/order", status_code=204)
+        async def reorder_items(body: TodoReorder) -> None:
+            """Set explicit manual order from a drag-reorder. ``body.order`` is the
+            list of item ids in their new top-to-bottom order; we rewrite each
+            row's ``position`` to its index so the list's ``position ASC`` sort
+            reflects it. The list still sorts by ``done`` then ``priority`` first,
+            so dragging orders *within* a priority band (the visual grouping)."""
+            t = await self._ensure()
+            now = time.time()
+            for i, item_id in enumerate(body.order):
+                await self.db.execute(
+                    f"UPDATE {t} SET position = ?, updated = ? WHERE id = ?",
+                    (i, now, item_id),
+                )
+            self.events.publish("todo.reordered", {"order": body.order})
 
         @r.patch("/items/{item_id}")
         async def update_item(item_id: int, body: TodoUpdate) -> dict[str, Any]:
@@ -385,6 +409,9 @@ class Todo(BaseAttachment):
                     source="items",
                     key="id",
                     empty="Nothing yet — add your first task.",
+                    # Drag a row by its handle to set a manual order. Items sort by
+                    # priority first, so a drag reorders within a priority band.
+                    reorder=ui.patch("items/order"),
                     item=ui.surface(
                         interactive=True,
                         # Tapping anywhere on the row toggles done — the checkbox

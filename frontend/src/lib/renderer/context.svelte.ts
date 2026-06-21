@@ -123,6 +123,39 @@ export class RenderContext {
 		}
 		this.refreshAll();
 	}
+
+	/**
+	 * Apply a drag-reorder of `source` to the given top-to-bottom order of row
+	 * keys. Optimistic: reorder the local rows immediately (so the UI doesn't
+	 * snap back while the request is in flight), then POST/PATCH the action with
+	 * `{ order: [...] }`. On failure, reload from the server to resync.
+	 */
+	async runReorder(
+		source: string,
+		key: string,
+		orderedKeys: unknown[],
+		action: Action
+	): Promise<void> {
+		const rows = (this.sources[source] ?? []) as Record<string, unknown>[];
+		const byKey = new Map(rows.map((r) => [String(r[key]), r]));
+		const reordered = orderedKeys
+			.map((k) => byKey.get(String(k)))
+			.filter((r): r is Record<string, unknown> => r !== undefined);
+		// Keep any rows not named in `orderedKeys` (e.g. a different visual band)
+		// in their existing relative position, appended after the moved set.
+		const moved = new Set(orderedKeys.map((k) => String(k)));
+		for (const r of rows) if (!moved.has(String(r[key]))) reordered.push(r);
+		this.sources[source] = reordered;
+		void kvSet(this.#cacheKey(source), reordered);
+		try {
+			await attAction(this.attachmentId, action.method, action.path, {
+				order: orderedKeys
+			});
+		} catch {
+			// Server rejected the order — pull the truth back.
+			await this.loadSource(source, { silent: true });
+		}
+	}
 }
 
 // (refreshAll already loads silently — actions never flash a spinner.)

@@ -6,6 +6,7 @@
 	import { getContext } from 'svelte';
 	import Self from './Node.svelte';
 	import { Surface, Stack, Text, Badge, Button, Field, Icon } from '$lib/components';
+	import ReorderableList from './ReorderableList.svelte';
 	import FileManager from './FileManager.svelte';
 	import MailClient from './MailClient.svelte';
 	import SystemStats from './SystemStats.svelte';
@@ -21,6 +22,7 @@
 	import Chat from './Chat.svelte';
 	import Pomodoro from './Pomodoro.svelte';
 	import Updates from './Updates.svelte';
+	import Passwords from './Passwords.svelte';
 	import type { RenderContext } from './context.svelte';
 	import type { UINode } from '$lib/manifest/types';
 
@@ -156,6 +158,8 @@
 		<Text role="muted">Loading…</Text>
 	{:else if rows.length === 0}
 		<Text role="muted">{node.empty ?? 'Nothing here yet.'}</Text>
+	{:else if node.reorder}
+		<ReorderableList {node} {rows} />
 	{:else}
 		<Stack gap={2}>
 			{#each rows as r (r[node.key ?? 'id'])}
@@ -217,6 +221,8 @@
 	<Pomodoro />
 {:else if node.type === 'updates'}
 	<Updates />
+{:else if node.type === 'passwords'}
+	<Passwords />
 {:else}
 	<Text role="muted">[unknown node: {node.type}]</Text>
 {/if}
