@@ -10,7 +10,7 @@
 	import { manifest } from '$lib/manifest/store.svelte';
 	import { notifications } from '$lib/notifications/store.svelte';
 	import { update } from '$lib/update/store.svelte';
-	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate, UpdateBanner, ThemeEffects } from '$lib/components';
+	import { Sidebar, Icon, PasswordLogin, PinUnlock, AccountSetup, LockGate, UpdateBanner, ThemeEffects, RecoveryPhraseModal } from '$lib/components';
 	import { auth } from '$lib/auth.svelte';
 	import { setAuthLostHandler } from '$lib/api';
 
@@ -111,6 +111,10 @@
 </svelte:head>
 
 <ThemeEffects />
+
+<!-- One-time recovery-phrase display: appears (over any screen) right after a
+     legacy account migrates to the envelope or a new account is set up. -->
+<RecoveryPhraseModal />
 
 {#if auth.state === 'loading'}
 	<div class="gate-loading"></div>

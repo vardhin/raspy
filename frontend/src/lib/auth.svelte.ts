@@ -21,12 +21,28 @@ import {
 	hasWrappedMasterKey
 } from '$lib/crypto/keystore';
 import { ensureIdentity, type Keypair } from '$lib/crypto/identity';
+import {
+	migrateLegacy,
+	unwrapWithPassword,
+	unwrapWithMnemonic,
+	rewrapForPassword,
+	type RecoveryWraps
+} from '$lib/crypto/recovery';
 
 export type AuthState = 'loading' | 'password' | 'pin' | 'reset' | 'active';
 
 interface KdfParams {
 	auth_salt: string;
 	master_salt: string;
+}
+
+interface RecoveryMaterial {
+	recovery_salt: string | null;
+	wrap_pw: string | null;
+	wrap_pw_nonce: string | null;
+	wrap_mn: string | null;
+	wrap_mn_nonce: string | null;
+	dek_migrated: boolean;
 }
 
 interface SessionResp {
@@ -167,8 +183,11 @@ class Auth {
 				this.state = 'reset';
 				return;
 			}
-			// Derive + hold the vault master key; never sent anywhere.
-			this.#masterKey = await deriveMasterKey(password, params.master_salt);
+			// Derive the password-KEK (== legacy master_key), then resolve it to the
+			// vault DEK (unwrap for a migrated account, or migrate a legacy one). The
+			// DEK is what every vault consumer reads; never sent anywhere.
+			const kekPw = await deriveMasterKey(password, params.master_salt);
+			this.#masterKey = await this.#resolveDEK(data.username, kekPw);
 			this.state = 'active';
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Login failed.';
@@ -311,7 +330,8 @@ class Auth {
 				this.error = res.status === 429 ? 'Too many attempts — wait and retry.' : 'Wrong password.';
 				return;
 			}
-			this.#masterKey = await deriveMasterKey(password, params.master_salt);
+			const kekPw = await deriveMasterKey(password, params.master_salt);
+			this.#masterKey = await this.#resolveDEK(this.username, kekPw);
 			if (pin) {
 				try {
 					await this.setLocalPin(pin);
@@ -359,6 +379,154 @@ class Auth {
 		});
 		if (!res.ok) throw new Error('could not fetch KDF params');
 		return res.json();
+	}
+
+	// --- recovery / DEK envelope (plan/35) -----------------------------------
+
+	/** A freshly-minted recovery phrase the UI must show the user exactly once.
+	 *  Set during migration (or first setup); cleared once acknowledged. */
+	pendingMnemonic = $state<string | null>(null);
+
+	acknowledgeMnemonic(): void {
+		this.pendingMnemonic = null;
+	}
+
+	async #recoveryMaterial(username: string): Promise<RecoveryMaterial> {
+		const res = await fetch(apiUrl(`/api/auth/recovery/${encodeURIComponent(username)}`), {
+			headers: { accept: 'application/json' }
+		});
+		if (!res.ok) throw new Error('could not fetch recovery material');
+		return res.json();
+	}
+
+	async #putRecovery(wraps: RecoveryWraps): Promise<void> {
+		const res = await fetch(apiUrl('/api/auth/recovery'), {
+			method: 'PUT',
+			credentials: 'include',
+			headers: {
+				'content-type': 'application/json',
+				...(csrfToken() ? { 'x-csrf-token': csrfToken()! } : {})
+			},
+			body: JSON.stringify(wraps)
+		});
+		if (!res.ok) throw new Error(`could not store recovery envelope: ${res.status}`);
+	}
+
+	/**
+	 * Turn the password-derived key (KEK_pw, today's master_key) into the vault
+	 * DEK. This is the single chokepoint: every consumer reads `#masterKey`, so we
+	 * only change *what it resolves to* here, after a password login/unlock.
+	 *
+	 *  - migrated account  → unwrap wrap_pw → DEK.
+	 *  - legacy account    → DEK *is* KEK_pw (no ciphertext changes); mint a
+	 *                        mnemonic, persist both wraps, surface the phrase once.
+	 *
+	 * Must run while authed (so the PUT is accepted) — i.e. after a successful
+	 * login/unlock that established the session. Returns the DEK to store.
+	 */
+	async #resolveDEK(username: string, kekPw: Uint8Array): Promise<Uint8Array> {
+		const mat = await this.#recoveryMaterial(username);
+		if (mat.dek_migrated && mat.wrap_pw && mat.wrap_pw_nonce) {
+			const dek = await unwrapWithPassword(kekPw, {
+				wrap_pw: mat.wrap_pw,
+				wrap_pw_nonce: mat.wrap_pw_nonce
+			});
+			// If the wrap won't open under this password-KEK, the account's wrap_pw
+			// is stale relative to the password (shouldn't happen on a normal login;
+			// a deliberate password change re-wraps). Fall back to treating KEK_pw as
+			// the key so the session still works rather than bricking the vault.
+			if (dek) return dek;
+			return kekPw;
+		}
+		// Legacy account: migrate in place. DEK == KEK_pw, so nothing is
+		// re-encrypted. Persist the envelope and show the phrase once.
+		try {
+			const { dek, wraps, mnemonic } = await migrateLegacy(kekPw);
+			await this.#putRecovery(wraps);
+			this.pendingMnemonic = mnemonic;
+			return dek;
+		} catch {
+			// Migration is best-effort: if the PUT fails (offline, race), keep the
+			// user working with KEK_pw as the key; we'll retry on the next unlock.
+			return kekPw;
+		}
+	}
+
+	/**
+	 * Break-glass recovery from the login screen: the user supplies their mnemonic
+	 * and a new password (+ optional PIN). We unwrap the DEK locally from wrap_mn,
+	 * reset the server-side password via /recover, re-wrap wrap_pw under the new
+	 * password-KEK, then log in fresh. The vault (DEK) is preserved end to end.
+	 */
+	async recoverWithMnemonic(
+		username: string,
+		mnemonic: string,
+		newPassword: string,
+		newPin?: string
+	): Promise<void> {
+		this.busy = true;
+		this.error = null;
+		try {
+			const mat = await this.#recoveryMaterial(username);
+			if (!mat.dek_migrated || !mat.wrap_mn || !mat.wrap_mn_nonce || !mat.recovery_salt) {
+				this.error = 'No recovery phrase is set up for this account.';
+				return;
+			}
+			const dek = await unwrapWithMnemonic(mnemonic, {
+				recovery_salt: mat.recovery_salt,
+				wrap_mn: mat.wrap_mn,
+				wrap_mn_nonce: mat.wrap_mn_nonce
+			});
+			if (!dek) {
+				this.error = 'That recovery phrase is not correct.';
+				return;
+			}
+			// Reset the password server-side (proven by possession of the mnemonic).
+			const params = await this.#kdf(username);
+			const newAuthKey = await deriveAuthKey(newPassword, params.auth_salt);
+			const res = await fetch(apiUrl('/api/auth/recover'), {
+				method: 'POST',
+				credentials: 'include',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					username,
+					new_auth_key: newAuthKey,
+					...(newPin ? { new_pin: newPin } : {})
+				})
+			});
+			if (!res.ok) {
+				this.error = res.status === 429 ? 'Too many attempts — wait and retry.' : 'Recovery failed.';
+				return;
+			}
+			// Log in with the new password to get a session, then re-wrap wrap_pw
+			// under the new password-KEK and persist it.
+			await this.login(username, newPassword, newPin);
+			if (this.state !== 'active') return;
+			const newKekPw = await deriveMasterKey(newPassword, params.master_salt);
+			const wraps = await rewrapForPassword(dek, newKekPw, {
+				recovery_salt: mat.recovery_salt,
+				wrap_pw: mat.wrap_pw ?? '',
+				wrap_pw_nonce: mat.wrap_pw_nonce ?? '',
+				wrap_mn: mat.wrap_mn,
+				wrap_mn_nonce: mat.wrap_mn_nonce
+			});
+			await this.#putRecovery(wraps);
+			// The in-memory key must be the DEK (matches every existing ciphertext),
+			// not the freshly-derived KEK_pw.
+			this.#masterKey = dek;
+			if (newPin) {
+				try {
+					await this.setLocalPin(newPin);
+					this.hasLocalPin = true;
+				} catch {
+					/* non-fatal */
+				}
+			}
+		} catch (e) {
+			this.error = e instanceof Error ? e.message : 'Recovery failed.';
+		} finally {
+			this.busy = false;
+		}
 	}
 }
 

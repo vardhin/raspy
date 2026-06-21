@@ -18,11 +18,13 @@ from .deps import (
     ACCESS_COOKIE,
     CSRF_COOKIE,
     REFRESH_COOKIE,
+    Principal,
     check_csrf,
     client_ip,
     get_auth,
     refresh_token_from,
     require_admin,
+    require_auth,
 )
 from .service import AuthError, AuthService, LoginResult
 
@@ -62,6 +64,24 @@ class CreateChildBody(BaseModel):
 
 class UpdateChildBody(BaseModel):
     allowed_apps: list[str] = Field(default_factory=list)
+
+
+class SetRecoveryBody(BaseModel):
+    """Opaque recovery wraps the browser computed (plan/35). All values are b64
+    ciphertext / a public salt; the server stores them verbatim."""
+    recovery_salt: str = Field(min_length=1, max_length=128)
+    wrap_pw: str = Field(min_length=1, max_length=512)
+    wrap_pw_nonce: str = Field(min_length=1, max_length=128)
+    wrap_mn: str = Field(min_length=1, max_length=512)
+    wrap_mn_nonce: str = Field(min_length=1, max_length=128)
+
+
+class RecoverBody(BaseModel):
+    """Break-glass password reset proven by the mnemonic (client-side). The server
+    only takes the new auth_key (+ optional PIN); the wraps/DEK are untouched."""
+    username: str = Field(min_length=1, max_length=128)
+    new_auth_key: str = Field(min_length=1, max_length=512)
+    new_pin: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 def _settings(request: Request) -> Settings:
@@ -129,6 +149,64 @@ async def kdf_params(request: Request, username: str, svc: AuthService = Depends
     if salts is None:
         salts = svc.decoy_salts(username)
     return salts
+
+
+@router.get("/recovery/{username}")
+async def recovery_material(
+    request: Request, username: str, svc: AuthService = Depends(get_auth)
+):
+    """Public: the opaque recovery wraps + salt the client needs to recover the
+    DEK from a mnemonic (or to detect whether migration has happened). Like
+    /kdf, the values are non-secret. A missing account returns the same shape with
+    nulls + dek_migrated:false, so it doesn't reveal whether the user exists."""
+    material = await svc.recovery_material(username)
+    if material is None:
+        material = {
+            "recovery_salt": None,
+            "wrap_pw": None, "wrap_pw_nonce": None,
+            "wrap_mn": None, "wrap_mn_nonce": None,
+            "dek_migrated": False,
+        }
+    return material
+
+
+@router.put("/recovery", status_code=204)
+async def set_recovery(
+    request: Request, body: SetRecoveryBody,
+    svc: AuthService = Depends(get_auth),
+    principal: Principal = Depends(require_auth),
+):
+    """Authed: the client stores its recovery wraps for its OWN account (migration
+    or a wrap rotation). Scoped to the principal — a user can only write their own
+    envelope."""
+    check_csrf(request, _settings(request).auth)
+    try:
+        await svc.set_recovery(
+            principal.username,
+            recovery_salt=body.recovery_salt,
+            wrap_pw=body.wrap_pw, wrap_pw_nonce=body.wrap_pw_nonce,
+            wrap_mn=body.wrap_mn, wrap_mn_nonce=body.wrap_mn_nonce,
+        )
+    except AuthError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/recover", status_code=204)
+async def recover(
+    request: Request, response: Response, body: RecoverBody,
+    svc: AuthService = Depends(get_auth),
+):
+    """Public, rate-limited: break-glass password reset proven by the mnemonic.
+    The client has already unwrapped the DEK from wrap_mn locally; here we only
+    reset the login hash, then the client re-PUTs wrap_pw under the new password.
+    Sessions are revoked so the user signs in fresh."""
+    try:
+        await svc.recover_password(
+            body.username, body.new_auth_key, body.new_pin, ip=_ip(request)
+        )
+    except AuthError as exc:
+        raise _auth_error(exc)
+    _clear_session_cookies(response)
 
 
 @router.post("/login")

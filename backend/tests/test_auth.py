@@ -251,3 +251,92 @@ async def test_child_setup_requires_temp_pin_and_blocks_unallowed_apps(setup):
     assert "vault" not in app_ids
     assert (await client.get("/api/att/notes/notes")).status_code == 200
     assert (await client.get("/api/att/vault/manifest")).status_code == 403
+
+
+# --- recovery envelope (plan/35) ---------------------------------------------
+
+_WRAPS = {
+    "recovery_salt": "cmVjb3Zlcnktc2FsdC0xNg",
+    "wrap_pw": "d3JhcF9wdw",
+    "wrap_pw_nonce": "d3JhcF9wd19ub25jZQ",
+    "wrap_mn": "d3JhcF9tbg",
+    "wrap_mn_nonce": "d3JhcF9tbl9ub25jZQ",
+}
+
+
+async def test_recovery_material_legacy_unmigrated(setup):
+    client, _ = setup
+    r = await client.get(f"/api/auth/recovery/{USERNAME}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dek_migrated"] is False
+    assert body["wrap_pw"] is None and body["wrap_mn"] is None
+
+
+async def test_recovery_material_missing_user_is_decoy(setup):
+    client, _ = setup
+    # A non-existent user returns the same null shape, not a 404 (no existence leak).
+    r = await client.get("/api/auth/recovery/ghost")
+    assert r.status_code == 200
+    assert r.json()["dek_migrated"] is False
+
+
+async def test_put_recovery_requires_auth(setup):
+    client, _ = setup
+    client.cookies.clear()
+    r = await client.put("/api/auth/recovery", json=_WRAPS)
+    assert r.status_code == 401
+
+
+async def test_put_recovery_migrates_and_persists(setup):
+    client, salt = setup
+    csrf = (await _login(client, salt)).json()["csrf_token"]
+    r = await client.put(
+        "/api/auth/recovery", json=_WRAPS, headers={"X-CSRF-Token": csrf}
+    )
+    assert r.status_code == 204, r.text
+    mat = (await client.get(f"/api/auth/recovery/{USERNAME}")).json()
+    assert mat["dek_migrated"] is True
+    assert mat["wrap_pw"] == _WRAPS["wrap_pw"]
+    assert mat["wrap_mn"] == _WRAPS["wrap_mn"]
+    assert mat["recovery_salt"] == _WRAPS["recovery_salt"]
+
+
+async def test_recover_refused_before_migration(setup):
+    client, _ = setup
+    client.cookies.clear()
+    r = await client.post(
+        "/api/auth/recover",
+        json={"username": USERNAME, "new_auth_key": "brand-new-key"},
+    )
+    # No mnemonic exists yet → refused (401), and the wraps stay absent.
+    assert r.status_code == 401
+
+
+async def test_recover_after_migration_resets_and_revokes(setup):
+    client, salt = setup
+    # Migrate first (authed PUT), then recover from a clean (pre-auth) client.
+    csrf = (await _login(client, salt)).json()["csrf_token"]
+    assert (await client.put(
+        "/api/auth/recovery", json=_WRAPS, headers={"X-CSRF-Token": csrf}
+    )).status_code == 204
+    client.cookies.clear()
+
+    new_key = "recovered-auth-key"
+    r = await client.post(
+        "/api/auth/recover",
+        json={"username": USERNAME, "new_auth_key": new_key, "new_pin": "424242"},
+    )
+    assert r.status_code == 204, r.text
+
+    # The wraps/DEK are untouched by recover (only the login hash changed).
+    mat = (await client.get(f"/api/auth/recovery/{USERNAME}")).json()
+    assert mat["wrap_pw"] == _WRAPS["wrap_pw"] and mat["wrap_mn"] == _WRAPS["wrap_mn"]
+
+    # The old password no longer works; the new one does.
+    assert (await client.post(
+        "/api/auth/login", json={"username": USERNAME, "auth_key": AUTH_KEY}
+    )).status_code == 401
+    assert (await client.post(
+        "/api/auth/login", json={"username": USERNAME, "auth_key": new_key}
+    )).status_code == 200

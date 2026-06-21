@@ -33,3 +33,4 @@ export { default as SudoPrompt } from './SudoPrompt.svelte';
 export { default as AccountSetup } from './AccountSetup.svelte';
 export { default as LockGate } from './LockGate.svelte';
 export { default as UpdateBanner } from './UpdateBanner.svelte';
+export { default as RecoveryPhraseModal } from './RecoveryPhraseModal.svelte';

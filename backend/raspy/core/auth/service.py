@@ -107,7 +107,19 @@ class AuthService:
                 must_reset  INTEGER NOT NULL DEFAULT 0,
                 -- JSON list of attachment ids this account may see; NULL = all
                 -- (admin). Children get an explicit allow-list.
-                allowed_apps TEXT
+                allowed_apps TEXT,
+                -- Recovery envelope (plan/35). The vault root is a random DEK;
+                -- it is wrapped under the password-KEK and (optionally) a
+                -- mnemonic-KEK, both client-side. The server stores only opaque
+                -- wraps — it never sees the DEK, password, or mnemonic. All NULL
+                -- + dek_migrated=0 means a legacy account whose DEK == the
+                -- password-derived master_key (migrated on next browser unlock).
+                recovery_salt TEXT,   -- salt for the mnemonic KEK (16B, b64)
+                wrap_pw       TEXT,   -- secretbox(DEK, nonce_pw, KEK_pw),  b64
+                wrap_pw_nonce TEXT,
+                wrap_mn       TEXT,   -- secretbox(DEK, nonce_mn, KEK_mn),  b64
+                wrap_mn_nonce TEXT,
+                dek_migrated  INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -174,6 +186,15 @@ class AuthService:
             "role": "TEXT NOT NULL DEFAULT 'admin'",
             "must_reset": "INTEGER NOT NULL DEFAULT 0",
             "allowed_apps": "TEXT",
+            # Recovery envelope (plan/35) — additive, all nullable. Existing rows
+            # get dek_migrated=0 ⇒ treated as legacy (DEK == master_key) until the
+            # client migrates on next password unlock.
+            "recovery_salt": "TEXT",
+            "wrap_pw": "TEXT",
+            "wrap_pw_nonce": "TEXT",
+            "wrap_mn": "TEXT",
+            "wrap_mn_nonce": "TEXT",
+            "dek_migrated": "INTEGER NOT NULL DEFAULT 0",
         }
         for col, decl in adds.items():
             if col not in have:
@@ -227,6 +248,81 @@ class AuthService:
             "argon_memory_kib": self._cfg.argon_memory_kib,
             "argon_parallelism": self._cfg.argon_parallelism,
         }
+
+    # --- recovery envelope (plan/35) -----------------------------------------
+
+    async def recovery_material(self, username: str) -> dict[str, Any] | None:
+        """The opaque recovery wraps + salt the client needs to recover the DEK
+        from a mnemonic (and to know whether the account is migrated yet). Returns
+        None for a missing account. All values are opaque/non-secret ciphertext or
+        public salts — like kdf_salts, this is safe to serve pre-auth."""
+        account = await self._get_account(username)
+        if account is None:
+            return None
+        return {
+            "recovery_salt": account.get("recovery_salt"),
+            "wrap_pw": account.get("wrap_pw"),
+            "wrap_pw_nonce": account.get("wrap_pw_nonce"),
+            "wrap_mn": account.get("wrap_mn"),
+            "wrap_mn_nonce": account.get("wrap_mn_nonce"),
+            "dek_migrated": bool(account.get("dek_migrated")),
+        }
+
+    async def set_recovery(
+        self, username: str, *,
+        recovery_salt: str,
+        wrap_pw: str, wrap_pw_nonce: str,
+        wrap_mn: str, wrap_mn_nonce: str,
+    ) -> None:
+        """Persist the recovery envelope wraps for an account and flag it migrated.
+
+        Written by the browser after it mints the DEK + mnemonic (first migration)
+        or rotates a wrap (password change / mnemonic re-issue). The server stores
+        only opaque blobs; it never learns the DEK, password, or mnemonic."""
+        if await self._get_account(username) is None:
+            raise AuthError(f"no such account {username!r}")
+        await self._db.execute(
+            f"UPDATE {_T_ACCOUNT} SET "
+            f"recovery_salt = ?, wrap_pw = ?, wrap_pw_nonce = ?, "
+            f"wrap_mn = ?, wrap_mn_nonce = ?, dek_migrated = 1 "
+            f"WHERE username = ?",
+            (recovery_salt, wrap_pw, wrap_pw_nonce, wrap_mn, wrap_mn_nonce, username),
+        )
+
+    async def recover_password(
+        self, username: str, new_auth_key: str, new_pin: str | None, *, ip: str | None
+    ) -> None:
+        """Break-glass reset: set a new password (+ optional PIN) without touching
+        the recovery wraps or the DEK. The caller has already proven possession of
+        the mnemonic *client-side* by unwrapping wrap_mn → DEK; the server only
+        resets the login hash here. The client then re-PUTs a fresh wrap_pw under
+        the new password-KEK (set_recovery), so the vault stays intact.
+
+        Rate-limited on the account + IP like a login, so this can't be used to
+        brute the username space. Revokes existing sessions."""
+        await self._check_locked("ip", ip or "?")
+        await self._check_locked("account", username)
+        account = await self._get_account(username)
+        if account is None or not bool(account.get("dek_migrated")):
+            # No migrated account ⇒ no mnemonic exists to recover with. Record a
+            # failure (constant-ish) so probing is rate-limited, then refuse.
+            await self._record_failure("ip", ip or "?")
+            await self._record_failure("account", username)
+            await self._audit("recover", False, ip, username)
+            raise AuthError("recovery unavailable")
+        updates = "pw_hash = ?"
+        params: list[Any] = [self._ph.hash(new_auth_key)]
+        if new_pin:
+            updates += ", pin_hash = ?"
+            params.append(self._ph.hash(new_pin))
+        params.append(username)
+        await self._db.execute(
+            f"UPDATE {_T_ACCOUNT} SET {updates} WHERE username = ?", tuple(params)
+        )
+        await self._reset_attempts("ip", ip or "?")
+        await self._reset_attempts("account", username)
+        await self.revoke_all(username)
+        await self._audit("recover", True, ip, username)
 
     async def create_account(
         self, username: str, auth_key: str, pin: str | None,
